@@ -1,3 +1,4 @@
 <resources>
     <string name="app_name">playGB</string>
+    <string name="app_launcher_desc">playGB app</string>
 </resources>
