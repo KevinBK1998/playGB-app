@@ -1,4 +1,13 @@
 <resources>
     <string name="app_name">playGB</string>
     <string name="app_launcher_desc">playGB app</string>
+    <string name="screen">Video</string>
+    <string name="select">SELECT</string>
+    <string name="start">START</string>
+    <string name="a">A</string>
+    <string name="b">B</string>
+    <string name="up">UP</string>
+    <string name="down">DOWN</string>
+    <string name="left">LEFT</string>
+    <string name="right">RIGHT</string>
 </resources>
