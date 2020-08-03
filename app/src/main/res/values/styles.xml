@@ -9,7 +9,7 @@
 
     <style name="translucent">
         <item name="android:alpha">0.3</item>
-        <item name="android:background">@android:color/background_dark</item>
+        <item name="android:background">@android:color/holo_purple</item>
         <item name="android:gravity">center</item>
         <item name="android:textColor">@android:color/white</item>
     </style>
