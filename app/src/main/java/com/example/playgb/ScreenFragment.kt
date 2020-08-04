@@ -17,7 +17,7 @@ import java.io.InputStream
 class ScreenFragment : Fragment() {
     private lateinit var myCanvas: Canvas
     private val myPaint = Paint()
-    private val myTextPaint = Paint().apply { textSize = 70f }
+    private val myTextPaint = Paint().apply { textSize = 40f }
 
     /*
     private val paint = Paint().apply {
@@ -38,7 +38,6 @@ class ScreenFragment : Fragment() {
     private var blackColour = 0
     private var whiteColour = 0
     private lateinit var inputBios: InputStream
-    private lateinit var bios: ByteArray
     private lateinit var cpu: Cpu
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -48,10 +47,15 @@ class ScreenFragment : Fragment() {
         myPaint.color = whiteColour
         myTextPaint.color = whiteColour
         inputBios = resources.openRawResource(R.raw.bios)
-        bios = ByteArray(inputBios.available())
+        val bios = ByteArray(inputBios.available())
         inputBios.read(bios)
-        cpu = Cpu(bios)
         inputBios.close()
+        inputBios = resources.openRawResource(R.raw.tetris)
+        val rom = ByteArray(inputBios.available())
+        inputBios.read(rom)
+        inputBios.close()
+        cpu = Cpu(bios, rom)
+
     }
 
     override fun onCreateView(
@@ -69,6 +73,11 @@ class ScreenFragment : Fragment() {
         return binding.root
     }
 
+    override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
+        super.onViewCreated(view, savedInstanceState)
+        repeat(24594) { cpu.execute() }
+    }
+
     private fun continueGame(view: View) {
         myBitmap = Bitmap.createBitmap(view.width, view.height, Bitmap.Config.ARGB_8888)
         binding.screenImage.setImageBitmap(myBitmap)
@@ -81,9 +90,12 @@ class ScreenFragment : Fragment() {
             (view.height + 144) / 2
         )
         myCanvas.drawRect(myRect, myPaint)
-        val msg = cpu.execute()
-        myCanvas.drawText(msg, 100f, 100f, myTextPaint)
+        var msg = ""
+        repeat(1) {
+            msg = cpu.execute()
+        }
         val log = cpu.log()
+        myCanvas.drawText(msg, 100f, 100f, myTextPaint)
         myCanvas.drawText(log, 100f, 200f, myTextPaint)
         view.invalidate()
     }
