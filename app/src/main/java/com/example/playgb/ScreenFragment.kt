@@ -17,7 +17,7 @@ import java.io.InputStream
 class ScreenFragment : Fragment() {
     private lateinit var myCanvas: Canvas
     private val myPaint = Paint()
-    private val myTextPaint = Paint().apply { textSize = 40f }
+    private val myTextPaint = Paint()
 
     /*
     private val paint = Paint().apply {
@@ -69,13 +69,16 @@ class ScreenFragment : Fragment() {
             container,
             false
         )
+        val flags =
+            View.SYSTEM_UI_FLAG_FULLSCREEN or View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY or View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION or View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
+        activity?.window?.decorView?.systemUiVisibility = flags
         binding.screenImage.setOnClickListener { continueGame(it) }
         return binding.root
     }
 
     override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
         super.onViewCreated(view, savedInstanceState)
-        repeat(24594) { cpu.execute() }
+        repeat(28800) { cpu.execute() }
     }
 
     private fun continueGame(view: View) {
@@ -95,8 +98,10 @@ class ScreenFragment : Fragment() {
             msg = cpu.execute()
         }
         val log = cpu.log()
+        myTextPaint.textSize = 70f
         myCanvas.drawText(msg, 100f, 100f, myTextPaint)
-        myCanvas.drawText(log, 100f, 200f, myTextPaint)
+        myTextPaint.textSize = 35f
+        myCanvas.drawText(log, 100f, 150f, myTextPaint)
         view.invalidate()
     }
 }
