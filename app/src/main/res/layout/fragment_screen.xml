@@ -11,6 +11,7 @@
             android:id="@+id/screenImage"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
+            android:clickable="false"
             android:contentDescription="@string/screen"
             app:srcCompat="@drawable/ic_launcher_splash" />
 

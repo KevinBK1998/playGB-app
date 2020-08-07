@@ -6,22 +6,15 @@
     <FrameLayout
         android:layout_width="match_parent"
         android:layout_height="match_parent"
-        android:background="#A332B6"
-        android:keepScreenOn="false"
+        android:background="@android:color/holo_purple"
         tools:context=".SplashFragment">
 
-        <!-- The primary full-screen view. This can be replaced with whatever view
-         is needed to present your content, e.g. VideoView, SurfaceView,
-         TextureView, etc. -->
         <ImageView
             android:id="@+id/splashImage"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:contentDescription="@string/app_launcher_desc"
             app:srcCompat="@drawable/ic_launcher_splash" />
-
-        <!-- This FrameLayout insets its children based on system windows using
-         android:fitsSystemWindows. -->
 
     </FrameLayout>
 </layout>

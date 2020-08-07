@@ -2,7 +2,8 @@ package com.example.playgb
 
 import android.util.Log
 
-class Cpu(val bios: ByteArray, val rom: ByteArray) {
+@ExperimentalUnsignedTypes
+class Cpu(private val bios: ByteArray, private val rom: ByteArray, private var gpu: Gpu) {
     private var pc: UShort = 0u
     private var sp: UShort = 0u
 
@@ -19,22 +20,24 @@ class Cpu(val bios: ByteArray, val rom: ByteArray) {
     //Additional Ram
     private var hram = ByteArray(128)
 
+    //Flags for Programming
+    private var cpuCrash = false
     private var biosFlag = true
     private var m = 0u
     private var no = 0u
     private var time = 0u
 
-    // TODO: 4/8/20 Improve GPU module for graphics management
-    private var gpu = Gpu()
+    // TODO: 8/8/20 Fix GPU module
+    //private var gpu = Gpu()
 
-    // TODO: 4/8/20 Improve APU module for sound management
+    // TODO: 7/8/20 Study APU working and implement it
     private var apu = Apu()
 
     private fun fetch(): UByte {
         return read8(pc++)
     }
 
-    private fun fetch2(): UShort {
+    private fun fetchTwice(): UShort {
         return (fetch().toInt() or (fetch().toInt() shl 8)).toUShort()
     }
 
@@ -54,44 +57,44 @@ class Cpu(val bios: ByteArray, val rom: ByteArray) {
                             when ((address and 0xF0u).toInt()) {
                                 0x10, 0x20, 0x30 -> return apu.read(address)
                                 0x40 -> return gpu.read(address)
-                                else -> Log.w("GB.mmu", "Access Requested to ${address}")
+                                else -> Log.w("GB.mmu", "Access Requested to $address")
                             }
                         else
                             return hram[(address and 0x7Fu).toInt()].toUByte()
                     }
-                    else -> Log.w("GB.mmu", "Access Requested to ${address}")
+                    else -> Log.w("GB.mmu", "Access Requested to $address")
                 }
             }
-            else -> Log.w("GB.mmu", "Access Requested to ${address}")
+            else -> Log.w("GB.mmu", "Access Requested to $address")
         }
         return 0u
     }
 
-    private fun writeu8(address: UShort, data: UByte) {
+    private fun writeU8(address: UShort, data: UByte) {
         when ((address and 0xF000u).toInt()) {
             0x8000, 0x9000 -> gpu.writeToVRam(address, data)
             0xF000 -> {
                 when ((address and 0xF00u).toInt()) {
                     0xF00 -> {
-                        if (address == 0xFF46.toUShort())
-                            dmaTransfer(data)
-                        else if (address < 0xFF80u)
-                            when ((address and 0xF0u).toInt()) {
+                        when {
+                            address == 0xFF46.toUShort() -> dmaTransfer(data)
+                            address < 0xFF80u -> when ((address and 0xF0u).toInt()) {
                                 0x10, 0x20, 0x30 -> apu.write(address, data)
                                 0x40 -> gpu.write(address, data)
-                                else -> Log.w("GB.mmu", "Access Requested to ${address}")
+                                else -> Log.w("GB.mmu", "Access Requested to $address")
                             }
-                        else hram[(address and 0x7Fu).toInt()] = data.toByte()
+                            else -> hram[(address and 0x7Fu).toInt()] = data.toByte()
+                        }
                     }
-                    else -> Log.w("GB.mmu", "Access Requested to ${address}")
+                    else -> Log.w("GB.mmu", "Access Requested to $address")
                 }
             }
-            else -> Log.w("GB.mmu", "Access Requested to ${address}")
+            else -> Log.w("GB.mmu", "Access Requested to $address")
         }
     }
 
     private fun dmaTransfer(data: UByte) {
-        TODO("Implement dma transfer from rom to oam")
+        TODO("Implement dma transfer $data from rom to oam")
     }
 
     fun log(): String {
@@ -105,51 +108,50 @@ class Cpu(val bios: ByteArray, val rom: ByteArray) {
                 String.format("%02X", d.toByte()) + "|E=0x" +
                 String.format("%02X", e.toByte()) + "|F=0x" +
                 String.format("%02X", f.toByte()) + "|H=0x" + String.format("%02X", h.toByte()) +
-                "|L=0x" + String.format("%02X", l.toByte()) + "|Stepped ${no} times|EmuTime="
-        if (time > 10000u)
-            log += "${time / 1000u}ms"
-        else
-            log += "${time}us"
+                "|L=0x" + String.format("%02X", l.toByte()) + "|Stepped $no times|EmuTime="
+        log += if (time > 10000u) "${time / 1000u}ms" else "${time}us"
         return log
     }
-
-    // TODO: 4/8/20  Add looping for instructions
-
     fun execute(): String {
+        var msg = "Last OP"
         val op = fetch()
-        var msg = "0x" + String.format("%02X", op.toByte())
+        msg += "|0x" + String.format("%02X", op.toByte())
         no++
         when (op.toInt()) {
+            0x04 -> {
+                incB()
+                msg += "|INC B"
+            }
             0x05 -> {
-                decb()
+                decB()
                 msg += "|DEC B"
             }
             0x06 -> {
-                loadb_u8()
+                loadU8toB()
                 msg += "|LD B,u8"
             }
             0x0C -> {
-                incc()
+                incC()
                 msg += "|INC C"
             }
             0x0D -> {
-                decc()
+                decC()
                 msg += "|DEC C"
             }
             0x0E -> {
-                loadc_u8()
+                loadU8toC()
                 msg += "|LD C,u8"
             }
             0x11 -> {
-                loadde_u16()
+                loadU16toDE()
                 msg += "|LD DE,u16"
             }
             0x13 -> {
-                incde()
+                incDE()
                 msg += "|INC DE"
             }
             0x17 -> {
-                rotateLefta()
+                rotateLeftA()
                 msg += "|RLA"
             }
             0x18 -> {
@@ -157,24 +159,27 @@ class Cpu(val bios: ByteArray, val rom: ByteArray) {
                 msg += "|JR i8"
             }
             0x1A -> {
-                loada_DE()
+                loadValueAtDEtoA()
                 msg += "|LD A,[DE]"
             }
-
+            0x1E -> {
+                loadU8toE()
+                msg += "|LD E,u8"
+            }
             0x20 -> {
                 jumpRel("nz")
                 msg += "|JR NZ,i8"
             }
             0x21 -> {
-                loadhl_u16()
+                loadU16toHL()
                 msg += "|LD HL,u16"
             }
             0x22 -> {
-                loadIncHL_a()
+                loadAtHLvalueOfAThenIncHL()
                 msg += "|LDI [HL],A"
             }
             0x23 -> {
-                inchl()
+                incHL()
                 msg += "|INC HL"
             }
             0x28 -> {
@@ -182,35 +187,43 @@ class Cpu(val bios: ByteArray, val rom: ByteArray) {
                 msg += "|JR Z,i8"
             }
             0x2E -> {
-                loadl_u8()
+                loadU8toL()
                 msg += "|LD L,u8"
             }
             0x31 -> {
-                loadsp_u16()
+                loadU16toSP()
                 msg += "|LD SP,u16"
             }
             0x32 -> {
-                loadDecHL_a()
+                loadAtHLValueOfAThenDecHL()
                 msg += "|LDD [HL],A"
             }
             0x3D -> {
-                deca()
+                decA()
                 msg += "|DEC A"
             }
             0x3E -> {
-                loada_u8()
+                loadU8toA()
                 msg += "|LD A,u8"
             }
             0x4F -> {
-                loadc_a()
+                loadAtoC()
                 msg += "|LD C,A"
             }
+            0x57 -> {
+                loadAtoD()
+                msg += "|LD D,A"
+            }
+            0x67 -> {
+                loadAtoH()
+                msg += "|LD H,A"
+            }
             0x7B -> {
-                loada_e()
+                loadEtoA()
                 msg += "|LD A,E"
             }
             0x77 -> {
-                loadHL_a()
+                loadAtoAddressHL()
                 msg += "|LD [HL],A"
             }
             0xAF -> {
@@ -218,11 +231,11 @@ class Cpu(val bios: ByteArray, val rom: ByteArray) {
                 msg += "|XOR A"
             }
             0xC1 -> {
-                popbc()
+                popBC()
                 msg += "|POP BC"
             }
             0xC5 -> {
-                pushbc()
+                pushBC()
                 msg += "|PUSH BC"
             }
             0xC9 -> {
@@ -235,7 +248,7 @@ class Cpu(val bios: ByteArray, val rom: ByteArray) {
                 msg += "|0x" + String.format("%02X", op2.toByte())
                 when (op2.toInt()) {
                     0x11 -> {
-                        rotateLeftc()
+                        rotateLeftC()
                         msg += "|RL C"
                     }
                     0x7C -> {
@@ -245,74 +258,61 @@ class Cpu(val bios: ByteArray, val rom: ByteArray) {
                     else -> {
                         pc--
                         msg += "|Unknown Suffix OP"
+                        cpuCrash = true
                     }
                 }
             }
             0xCD -> {
-                callu16()
+                callU16()
                 msg += "|CALL u16"
             }
             0xE0 -> {
-                loadFFu8_a()
+                loadAtoAddressFFU8()
                 msg += "|LD [FF00+u8],A"
             }
             0xE2 -> {
-                loadFFC_a()
+                loadAtoAddressFFCc()
                 msg += "|LD [FF00+C],A"
             }
             0xEA -> {
-                loadAtu16_a()
+                loadAtU16ValueOfA()
                 msg += "|LD [u16],A"
             }
+            0xF0 -> {
+                loadValueAtFFU8toA()
+                msg += "|LD A,[FF+u8]"
+            }
             0xFE -> {
-                comparea_u8()
+                compareU8andA()
                 msg += "|CP A,u8"
             }
             else -> {
                 pc--
                 msg += "|Unknown OP"
+                cpuCrash = true
                 return msg
             }
         }
-        time += m * 4u
+        val t = 4u * m
+        time += t
+        gpu.timePassed(t.toInt())
         return msg
     }
 
-    private fun loadl_u8() {
+    //    fun hasNotCrashed(): Boolean {
+//        return !cpuCrash
+//    }
+    private fun loadU8toL() {
         l = fetch()
         m = 2u
     }
 
-    private fun decc() {
-        val res: UByte = (c - 1u).toUByte()
-        f = f and 0x10u
-        f = f or 0x40u
-        if (res == 0.toUByte())
-            f = f or 0x80u
-        if ((c and 0xFu) - 1u < 0u)
-            f = f or 0x20u
-        c = res
-        m = 1u
-    }
-
-    private fun deca() {
-        val res: UByte = (a - 1u).toUByte()
-        f = f and 0x10u
-        f = f or 0x40u
-        if (res == 0.toUByte())
-            f = f or 0x80u
-        if ((a and 0xFu) - 1u < 0u)
-            f = f or 0x20u
-        a = res
-        m = 1u
-    }
-
-    private fun loadAtu16_a() {
-        writeu8((fetch().toInt() or (fetch().toInt() shl 8)).toUShort(), a)
+    private fun loadAtU16ValueOfA() {
+        writeU8((fetch().toInt() or (fetch().toInt() shl 8)).toUShort(), a)
         m = 4u
     }
 
-    private fun comparea_u8() {
+    private fun compareU8andA() {
         f = 0x40u
         val lit = fetch()
         val res = (a - lit).toInt()
@@ -325,56 +325,12 @@ class Cpu(val bios: ByteArray, val rom: ByteArray) {
         m = 2u
     }
 
-    private fun loada_e() {
-        a = e
-        m = 1u
-    }
-
-    private fun incde() {
-        setde(getde() + 1u)
-        m = 2u
-    }
-
-    private fun setde(de: UInt) {
-        e = de.toUByte()
-        d = (de shr 8).toUByte()
-    }
-
     private fun ret() {
         pc = (read8(sp++).toInt() or (read8(sp++).toInt() shl 8)).toUShort()
         m = 4u
     }
 
-    private fun inchl() {
-        sethl(gethl() + 1u)
-        m = 2u
-    }
-
-    private fun loadIncHL_a() {
-        writeu8(gethl(), a)
-        sethl(gethl() + 1u)
-        m = 2u
-    }
-
-    private fun decb() {
-        val res: UByte = (b - 1u).toUByte()
-        f = f and 0x10u
-        f = f or 0x40u
-        if (res == 0.toUByte())
-            f = f or 0x80u
-        if ((b and 0xFu) - 1u < 0u)
-            f = f or 0x20u
-        b = res
-        m = 1u
-    }
-
-    private fun popbc() {
-        c = read8(sp++)
-        b = read8(sp++)
-        m = 3u
-    }
-
-    private fun rotateLefta() {
+    private fun rotateLeftA() {
         val carry = (f and 0x10u) > 0u
         f = 0u
         f = f or ((a and 0x80u).toUInt() shr 3).toUByte()
@@ -385,7 +341,7 @@ class Cpu(val bios: ByteArray, val rom: ByteArray) {
         m = 1u
     }
 
-    private fun rotateLeftc() {
+    private fun rotateLeftC() {
         val carry = (f and 0x10u) > 0u
         f = 0u
         f = f or ((c and 0x80u).toUInt() shr 3).toUByte()
@@ -397,56 +353,103 @@ class Cpu(val bios: ByteArray, val rom: ByteArray) {
         m = 2u
     }
 
-    private fun pushbc() {
-        writeu8(--sp, b)
-        writeu8(--sp, c)
+    private fun popBC() {
+        c = read8(sp++)
+        b = read8(sp++)
+        m = 3u
+    }
+
+    private fun pushBC() {
+        writeU8(--sp, b)
+        writeU8(--sp, c)
         m = 4u
     }
 
-    private fun loadb_u8() {
-        b = fetch()
-        m = 2u
+    private fun loadAtoH() {
+        h = a
+        m = 1u
     }
 
-    private fun loadc_a() {
+    private fun loadEtoA() {
+        a = e
+        m = 1u
+    }
+
+    private fun loadAtoC() {
         c = a
         m = 1u
     }
 
-    private fun callu16() {
-        val newpc = (fetch().toInt() or (fetch().toInt() shl 8)).toUShort()
-        writeu8(--sp, (pc.toUInt() shr 8).toUByte())
-        writeu8(--sp, pc.toUByte())
-        pc = newpc
+    private fun loadAtoD() {
+        d = a
+        m = 1u
+    }
+
+    private fun callU16() {
+        val newPC = (fetch().toInt() or (fetch().toInt() shl 8)).toUShort()
+        writeU8(--sp, (pc.toUInt() shr 8).toUByte())
+        writeU8(--sp, pc.toUByte())
+        pc = newPC
         m = 6u
     }
 
-    private fun loada_DE() {
-        a = read8(getde())
+    private fun decB() {
+        val res: UByte = (b - 1u).toUByte()
+        f = f and 0x10u
+        f = f or 0x40u
+        if (res == 0.toUByte())
+            f = f or 0x80u
+        if ((b and 0xFu) - 1u < 0u)
+            f = f or 0x20u
+        b = res
+        m = 1u
+    }
+
+    private fun decC() {
+        val res: UByte = (c - 1u).toUByte()
+        f = f and 0x10u
+        f = f or 0x40u
+        if (res == 0.toUByte())
+            f = f or 0x80u
+        if ((c and 0xFu) - 1u < 0u)
+            f = f or 0x20u
+        c = res
+        m = 1u
+    }
+
+    private fun decA() {
+        val res: UByte = (a - 1u).toUByte()
+        f = f and 0x10u
+        f = f or 0x40u
+        if (res == 0.toUByte())
+            f = f or 0x80u
+        if ((a and 0xFu) - 1u < 0u)
+            f = f or 0x20u
+        a = res
+        m = 1u
+    }
+
+    private fun incDE() {
+        setDE(getDE() + 1u)
         m = 2u
     }
 
-    private fun getde(): UShort {
-        return (e.toInt() or (d.toInt() shl 8)).toUShort()
-    }
-
-    private fun loadde_u16() {
-        e = fetch()
-        d = fetch()
-        m = 3u
-    }
-
-    private fun loadFFu8_a() {
-        writeu8((0xFF00u + fetch()).toUShort(), a)
-        m = 3u
-    }
-
-    private fun loadHL_a() {
-        writeu8(gethl(), a)
+    private fun incHL() {
+        setHL(getHL() + 1u)
         m = 2u
     }
 
-    private fun incc() {
+    private fun incB() {
+        f = f and 0x10u
+        if ((b and 0xFu) + 1u > 0xFu)
+            f = f or 0x20u
+        b++
+        if (b == 0.toUByte())
+            f = f or 0x80u
+        m = 1u
+    }
+
+    private fun incC() {
         f = f and 0x10u
         if ((c and 0xFu) + 1u > 0xFu)
             f = f or 0x20u
@@ -456,18 +459,38 @@ class Cpu(val bios: ByteArray, val rom: ByteArray) {
         m = 1u
     }
 
-    private fun loadFFC_a() {
-        writeu8((0xFF00u + c).toUShort(), a)
+    private fun loadAtoAddressFFU8() {
+        writeU8((0xFF00u + fetch()).toUShort(), a)
+        m = 3u
+    }
+
+    private fun loadAtoAddressFFCc() {
+        writeU8((0xFF00u + c).toUShort(), a)
         m = 2u
     }
 
-    private fun loada_u8() {
+    private fun loadValueAtFFU8toA() {
+        a = read8((0xFF00u + fetch()).toUShort())
+        m = 3u
+    }
+
+    private fun loadU8toB() {
+        b = fetch()
+        m = 2u
+    }
+
+    private fun loadU8toA() {
         a = fetch()
         m = 2u
     }
 
-    private fun loadc_u8() {
+    private fun loadU8toC() {
         c = fetch()
+        m = 2u
+    }
+
+    private fun loadU8toE() {
+        e = fetch()
         m = 2u
     }
 
@@ -505,26 +528,18 @@ class Cpu(val bios: ByteArray, val rom: ByteArray) {
         m = 2u
     }
 
-    private fun loadDecHL_a() {
-        writeu8(gethl(), a)
-        sethl(gethl() - 1u)
-        m = 2u
+    private fun setDE(de: UInt) {
+        e = de.toUByte()
+        d = (de shr 8).toUByte()
     }
 
-    private fun sethl(hl: UInt) {
+    private fun setHL(hl: UInt) {
         l = hl.toUByte()
         h = (hl shr 8).toUByte()
     }
 
-
-    private fun gethl(): UShort {
+    private fun getHL(): UShort {
         return (l.toInt() or (h.toInt() shl 8)).toUShort()
-    }
-
-    private fun loadhl_u16() {
-        l = fetch()
-        h = fetch()
-        m = 3u
     }
 
     private fun xorA() {
@@ -533,8 +548,46 @@ class Cpu(val bios: ByteArray, val rom: ByteArray) {
         m = 1u
     }
 
-    private fun loadsp_u16() {
-        sp = fetch2()
+    private fun getDE(): UShort {
+        return (e.toInt() or (d.toInt() shl 8)).toUShort()
+    }
+
+    private fun loadValueAtDEtoA() {
+        a = read8(getDE())
+        m = 2u
+    }
+
+    private fun loadAtoAddressHL() {
+        writeU8(getHL(), a)
+        m = 2u
+    }
+
+    private fun loadAtHLvalueOfAThenIncHL() {
+        writeU8(getHL(), a)
+        setHL(getHL() + 1u)
+        m = 2u
+    }
+
+    private fun loadAtHLValueOfAThenDecHL() {
+        writeU8(getHL(), a)
+        setHL(getHL() - 1u)
+        m = 2u
+    }
+
+    private fun loadU16toDE() {
+        e = fetch()
+        d = fetch()
+        m = 3u
+    }
+
+    private fun loadU16toHL() {
+        l = fetch()
+        h = fetch()
+        m = 3u
+    }
+
+    private fun loadU16toSP() {
+        sp = fetchTwice()
         m = 3u
     }
 }
