@@ -109,9 +109,14 @@ class Cpu(private val bios: ByteArray, private val rom: ByteArray, private var g
                 String.format("%02X", e.toByte()) + "|F=0x" +
                 String.format("%02X", f.toByte()) + "|H=0x" + String.format("%02X", h.toByte()) +
                 "|L=0x" + String.format("%02X", l.toByte()) + "|Stepped $no times|EmuTime="
-        log += if (time > 10000u) "${time / 1000u}ms" else "${time}us"
+        log += when {
+            time > 10000000u -> "${time / 1000000u}s"
+            time > 10000u -> "${time / 1000u}ms"
+            else -> "${time}us"
+        }
         return log
     }
+
     fun execute(): String {
         var msg = "Last OP"
         val op = fetch()
@@ -150,6 +155,10 @@ class Cpu(private val bios: ByteArray, private val rom: ByteArray, private var g
                 incDE()
                 msg += "|INC DE"
             }
+            0x15 -> {
+                decD()
+                msg += "|DEC D"
+            }
             0x17 -> {
                 rotateLeftA()
                 msg += "|RLA"
@@ -161,6 +170,10 @@ class Cpu(private val bios: ByteArray, private val rom: ByteArray, private var g
             0x1A -> {
                 loadValueAtDEtoA()
                 msg += "|LD A,[DE]"
+            }
+            0x1D -> {
+                decE()
+                msg += "|DEC E"
             }
             0x1E -> {
                 loadU8toE()
@@ -181,6 +194,10 @@ class Cpu(private val bios: ByteArray, private val rom: ByteArray, private var g
             0x23 -> {
                 incHL()
                 msg += "|INC HL"
+            }
+            0x24 -> {
+                incH()
+                msg += "|INC H"
             }
             0x28 -> {
                 jumpRel("z")
@@ -218,13 +235,21 @@ class Cpu(private val bios: ByteArray, private val rom: ByteArray, private var g
                 loadAtoH()
                 msg += "|LD H,A"
             }
+            0x77 -> {
+                loadAtoAddressHL()
+                msg += "|LD [HL],A"
+            }
             0x7B -> {
                 loadEtoA()
                 msg += "|LD A,E"
             }
-            0x77 -> {
-                loadAtoAddressHL()
-                msg += "|LD [HL],A"
+            0x7C -> {
+                loadHtoA()
+                msg += "|LD A,H"
+            }
+            0x90 -> {
+                subBFromA()
+                msg += "|SUB A,B"
             }
             0xAF -> {
                 xorA()
@@ -299,9 +324,24 @@ class Cpu(private val bios: ByteArray, private val rom: ByteArray, private var g
         return msg
     }
 
-    //    fun hasNotCrashed(): Boolean {
-//        return !cpuCrash
-//    }
+    private fun subBFromA() {
+        val res = (a - b).toInt()
+        f = 0u
+        f = f or 0x40u
+        if (res.toUByte() == 0.toUByte())
+            f = f or 0x80u
+        if ((a and 0xFu) - (b and 0xFu) < 0u)
+            f = f or 0x20u
+        if (res < 0)
+            f = f or 0x10u
+        a = res.toUByte()
+        m = 1u
+    }
+
+    fun hasNotCrashed(): Boolean {
+        return !cpuCrash
+    }
+
     private fun loadU8toL() {
         l = fetch()
         m = 2u
@@ -365,6 +405,12 @@ class Cpu(private val bios: ByteArray, private val rom: ByteArray, private var g
         m = 4u
     }
 
+    private fun loadHtoA() {
+        a = h
+        m = 1u
+    }
+
+
     private fun loadAtoH() {
         h = a
         m = 1u
@@ -393,6 +439,18 @@ class Cpu(private val bios: ByteArray, private val rom: ByteArray, private var g
         m = 6u
     }
 
+    private fun decA() {
+        val res: UByte = (a - 1u).toUByte()
+        f = f and 0x10u
+        f = f or 0x40u
+        if (res == 0.toUByte())
+            f = f or 0x80u
+        if ((a and 0xFu) - 1u < 0u)
+            f = f or 0x20u
+        a = res
+        m = 1u
+    }
+
     private fun decB() {
         val res: UByte = (b - 1u).toUByte()
         f = f and 0x10u
@@ -417,15 +475,27 @@ class Cpu(private val bios: ByteArray, private val rom: ByteArray, private var g
         m = 1u
     }
 
-    private fun decA() {
-        val res: UByte = (a - 1u).toUByte()
+    private fun decD() {
+        val res: UByte = (d - 1u).toUByte()
         f = f and 0x10u
         f = f or 0x40u
         if (res == 0.toUByte())
             f = f or 0x80u
-        if ((a and 0xFu) - 1u < 0u)
+        if ((d and 0xFu) - 1u < 0u)
             f = f or 0x20u
-        a = res
+        d = res
+        m = 1u
+    }
+
+    private fun decE() {
+        val res: UByte = (e - 1u).toUByte()
+        f = f and 0x10u
+        f = f or 0x40u
+        if (res == 0.toUByte())
+            f = f or 0x80u
+        if ((e and 0xFu) - 1u < 0u)
+            f = f or 0x20u
+        e = res
         m = 1u
     }
 
@@ -437,6 +507,16 @@ class Cpu(private val bios: ByteArray, private val rom: ByteArray, private var g
     private fun incHL() {
         setHL(getHL() + 1u)
         m = 2u
+    }
+
+    private fun incH() {
+        f = f and 0x10u
+        if ((h and 0xFu) + 1u > 0xFu)
+            f = f or 0x20u
+        h++
+        if (h == 0.toUByte())
+            f = f or 0x80u
+        m = 1u
     }
 
     private fun incB() {

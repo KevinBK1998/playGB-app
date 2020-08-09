@@ -2,7 +2,6 @@ package com.example.playgb
 
 import android.graphics.Bitmap
 import android.graphics.Canvas
-import android.graphics.Paint
 import android.graphics.Rect
 import android.media.*
 import android.os.Bundle
@@ -17,12 +16,15 @@ import androidx.fragment.app.Fragment
 import com.example.playgb.databinding.FragmentScreenBinding
 import java.io.*
 
+private const val SCALE_FACTOR = 4
+
 @ExperimentalUnsignedTypes
 class ScreenFragment : Fragment() {
     //Graphics
     private lateinit var myCanvas: Canvas
     private lateinit var myBitmap: Bitmap
-    private val myPaint = Paint().apply { style = Paint.Style.STROKE }
+    private var gameScreen =
+        Bitmap.createBitmap(SCREEN_WIDTH, SCREEN_HEIGHT, Bitmap.Config.ARGB_8888)
     private val myTextPaint = TextPaint()
     private val myRect = Rect()
     private var blackColour = 0
@@ -36,20 +38,21 @@ class ScreenFragment : Fragment() {
     //private lateinit var audioTrack: AudioTrack
     private lateinit var binding: FragmentScreenBinding
     private lateinit var cpu: Cpu
-    private var gpu = Gpu()
+    private var gpu = Gpu(gameScreen)
     private var isRecording = false
+    private var started = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         blackColour = ResourcesCompat.getColor(resources, R.color.colorBlack, null)
         whiteColour = ResourcesCompat.getColor(resources, R.color.colorWhite, null)
-        myPaint.color = whiteColour
         myTextPaint.apply {
             color = whiteColour
             textSize = 70f
         }
         val thread = Thread(Runnable { loadRom() })
         thread.start()
+        thread.join()
     }
 
     private fun loadRom() {
@@ -82,9 +85,26 @@ class ScreenFragment : Fragment() {
             View.SYSTEM_UI_FLAG_FULLSCREEN or View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY or View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION or View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
         @Suppress("deprecation")
         activity?.window?.decorView?.systemUiVisibility = flags
-        binding.screenImage.setOnClickListener {  //binding.screenImage.isClickable = false
-            startGame(it)
+        binding.screenImage.addOnLayoutChangeListener { view: View, l: Int, t: Int, r: Int, b: Int, _, _, _, _ ->
+            if (!(l == 0 && t == 0 && r == 0 && b == 0)) {
+                myBitmap = Bitmap.createBitmap(view.width, view.height, Bitmap.Config.ARGB_8888)
+                startX = (view.width - SCREEN_WIDTH * SCALE_FACTOR) / 2
+                startY = (view.height - SCREEN_HEIGHT * SCALE_FACTOR) / 2
+                binding.screenImage.setImageBitmap(myBitmap)
+                myCanvas = Canvas(myBitmap)
+                myRect.set(
+                    startX, startY,
+                    startX + SCREEN_WIDTH * SCALE_FACTOR,
+                    startY + SCREEN_HEIGHT * SCALE_FACTOR
+                )
+                myCanvas.drawColor(blackColour)
+                startGame()
+            }
         }
+//        binding.screenImage.setOnClickListener {  //binding.screenImage.isClickable = false
+//            startGame(it)
+//        }
+
         binding.startText.setOnClickListener {
             isRecording = true
             val thread = Thread(Runnable { record() })
@@ -98,12 +118,21 @@ class ScreenFragment : Fragment() {
         return binding.root
     }
 
-    override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
-        super.onViewCreated(view, savedInstanceState)
-        //audioTrack.write(music,0,musicLength)
-        val thread = Thread(Runnable { runBiosCpu() })
-        thread.start()
-        //audioTrack.play()
+//    override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
+//        super.onViewCreated(view, savedInstanceState)
+//        audioTrack.write(music,0,musicLength)
+//        val thread = Thread(Runnable { runBiosCpu() })
+//        thread.start()
+//        audioTrack.play()
+//    }
+
+    override fun onResume() {
+        super.onResume()
+        @Suppress("deprecation")
+        val flags =
+            View.SYSTEM_UI_FLAG_FULLSCREEN or View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY or View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION or View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
+        @Suppress("deprecation")
+        activity?.window?.decorView?.systemUiVisibility = flags
     }
 
     private fun play() {
@@ -217,40 +246,21 @@ class ScreenFragment : Fragment() {
     }
 
 
-    private fun runBiosCpu() {
-        repeat(28825) { cpu.execute() }
-        binding.screenImage.isClickable = true
-    }
-
-//    private fun runTillCrash() {
-//        while (cpu.hasNotCrashed()) {
-//            cpu.execute()
-//        }
+//    private fun runBiosCpu() {
+//        repeat(44000) { cpu.execute() }
+//        binding.screenImage.isClickable = true
 //    }
 
-    private fun startGame(view: View) {
-        myBitmap = Bitmap.createBitmap(view.width, view.height, Bitmap.Config.ARGB_8888)
-        startX = (view.width - SCREEN_WIDTH) / 2
-        startY = (view.height - SCREEN_HEIGHT) / 2
-        binding.screenImage.setImageBitmap(myBitmap)
-        myCanvas = Canvas(myBitmap)
+    private fun runTillCrash() {
         myCanvas.drawColor(blackColour)
-        val border = Rect(
-            startX - 1, startY - 1,
-            startX + SCREEN_WIDTH + 1, startY + SCREEN_HEIGHT + 1
-        )
-        myRect.set(
-            startX, startY,
-            startX + SCREEN_WIDTH * 2, startY + SCREEN_HEIGHT * 2
-        )
-        var msg = ""
-        //Uncomment For Auto Step
-        //val thread = Thread(Runnable { runTillCrash() })
-        //thread.start()
-        //thread.join()
-        repeat(3) {
-            msg = cpu.execute()
+        while (cpu.hasNotCrashed()) {
+            repeat(10000) {
+                cpu.execute()
+            }
+            myCanvas.drawBitmap(gameScreen, null, myRect, null)
+            binding.screenImage.invalidate()
         }
+        val msg = cpu.execute()
         var log = cpu.log()
         myTextPaint.textSize = 70f
         myCanvas.drawText(msg, 100f, 100f, myTextPaint)
@@ -259,9 +269,32 @@ class ScreenFragment : Fragment() {
         log = gpu.log()
         myTextPaint.textSize = 50f
         myCanvas.drawText(log, 100f, 200f, myTextPaint)
-        myCanvas.drawBitmap(gpu.getScreenBitmap(), null, myRect, null)
-        myCanvas.drawRect(border, myPaint)
-        view.invalidate()
+        binding.screenImage.invalidate()
+    }
+
+    private fun startGame() {
+        if (!started)
+            started = true
+        //var msg = ""
+        //Uncomment For Auto Step
+        val thread = Thread(Runnable { runTillCrash() })
+        thread.start()
+//        repeat(50) {
+//            repeat(456) {
+//                msg=cpu.execute()
+//            }
+//            var log = cpu.log()
+//            myCanvas.drawColor(blackColour)
+//            myTextPaint.textSize = 70f
+//            myCanvas.drawText(msg, 100f, 100f, myTextPaint)
+//            myTextPaint.textSize = 35f
+//            myCanvas.drawText(log, 100f, 150f, myTextPaint)
+//            log = gpu.log()
+//            myTextPaint.textSize = 50f
+//            myCanvas.drawText(log, 100f, 200f, myTextPaint)
+//            myCanvas.drawBitmap(gpu.getScreenBitmap(), null, myRect, null)
+//            view.invalidate()
+//        }
     }
 
 }

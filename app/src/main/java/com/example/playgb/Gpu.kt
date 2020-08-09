@@ -2,6 +2,7 @@ package com.example.playgb
 
 import android.graphics.Bitmap
 import android.graphics.Canvas
+import android.graphics.Color
 import android.graphics.Paint
 import android.util.Log
 
@@ -21,7 +22,7 @@ struct GPU
 }
 */
 @ExperimentalUnsignedTypes
-class Gpu {
+class Gpu(gameScreenOutput: Bitmap) {
     private var objPalette: UByte = 0u
     private var objPalette1: UByte = 0u
     private var bgPalette: UByte = 0u
@@ -29,16 +30,17 @@ class Gpu {
     private var windowY: UByte = 0u
     private var lineYCompare: UByte = 0u
     private var lineY: UByte = 0u
-    private var status: UByte = 0u
+    private var status: UByte = 2u
     private var scrollY: UByte = 0u
     private var scrollX: UByte = 0u
     private var vram = ByteArray(8192)
     private var lcdCtrl: UByte = 0u
 
     private var clock: Short = 0
-    private var gameScreen =
+    private var gameRenderScreen =
         Bitmap.createBitmap(SCREEN_WIDTH, SCREEN_HEIGHT, Bitmap.Config.ARGB_8888)
-    private var gameCanvas = Canvas(gameScreen)
+    private var gameRenderCanvas = Canvas(gameRenderScreen)
+    private var gameCanvas = Canvas(gameScreenOutput)
     private var painter = Paint()
     private var bgLine = ByteArray(160)
 
@@ -67,17 +69,18 @@ class Gpu {
     }
 
     fun readFromVRam(address: UShort): UByte {
-        Log.i("GB.mmu", "VRam read $address")
-        return vram[(address and 0x1FFFu).toInt()].toUByte()
+        val data = vram[(address and 0x1FFFu).toInt()].toUByte()
+        //Log.i("GB.mmu", "VRam read $data from $address")
+        return data
     }
 
     fun writeToVRam(address: UShort, data: UByte) {
-        Log.i("GB.mmu", "VRam write $address")
+        //Log.i("GB.mmu", "VRam write $data to $address ")
         vram[(address and 0x1FFFu).toInt()] = data.toByte()
     }
 
     fun write(address: UShort, data: UByte) {
-        Log.i("GB.mmu", "GPU write $data to $address")
+        //Log.i("GB.mmu", "GPU write $data to $address")
         when (address.toInt()) {
             0xFF40 -> lcdCtrl = data
             0xFF41 -> status = data
@@ -95,7 +98,7 @@ class Gpu {
     }
 
     fun read(address: UShort): UByte {
-        Log.i("GB.mmu", "GPU read $address")
+        //Log.i("GB.mmu", "GPU read $address")
         return when (address.toInt()) {
             0xFF40 -> lcdCtrl
             0xFF41 -> status
@@ -116,7 +119,8 @@ class Gpu {
     }
 
     fun log(): String {
-        return "CTRL=0x" + String.format("%02X", lcdCtrl.toByte()) + "|SCY=0x" +
+        return "CTRL=0x" + String.format("%02X", lcdCtrl.toByte()) + "|STAT=0x" +
+                String.format("%02X", status.toByte()) + "|SCY=0x" +
                 String.format("%02X", scrollY.toByte()) + "|SCX=0x" +
                 String.format("%02X", scrollX.toByte()) + "|LY=0x" +
                 String.format("%02X", lineY.toByte()) + "|BGPAL=0x" +
@@ -129,12 +133,13 @@ class Gpu {
         clock = (clock.toInt() + time).toShort()
         when (statusMode().toInt()) {
             0 -> {
+                //Log.i("GB.gpu","HBLANK $clock")
                 //HBLANK Mode
                 if (clock >= 208) {//376-168
                     status++
                     clock = 0
                     lineY++
-                    if (lineY == 143.toUByte()) {
+                    if (lineY == 144.toUByte()) {
                         if (!readCtrlBits("lcdDisplayEnable"))
                             clearScreen()
                         drawScreen()
@@ -142,8 +147,18 @@ class Gpu {
                 }
             }
             1 -> {
+                //Log.i("GB.gpu","VBLANK $clock $lineY")
+                if (clock >= 456) {
+                    clock = 0
+                    lineY++
+                    if (lineY == 153.toUByte()) {
+                        status++
+                        lineY = 0u
+                    }
+                }
             }
             2 -> {
+                //Log.i("GB.gpu","OAM $clock")
                 //OAM Mode
                 if (clock >= 80) {
                     status++
@@ -151,10 +166,11 @@ class Gpu {
                 }
             }
             3 -> {
+                //Log.i("GB.gpu","VRAM $clock")
                 //VRAM Mode
                 // TODO: 7/8/20 Add dots as per specifications
                 if (clock >= 168) {
-                    status = status and 0xFBu
+                    status = status and 0xFCu
                     clock = 0
                     if (readCtrlBits("lcdDisplayEnable"))
                         scanLine()
@@ -165,7 +181,9 @@ class Gpu {
     }
 
     private fun drawScreen() {
-        // TODO: 7/8/20 Draw the screen here
+//        if(readCtrlBits("lcdDisplayEnable"))
+//        printVRam()
+        gameCanvas.drawBitmap(gameRenderScreen, 0f, 0f, null)
     }
 
     private fun clearScreen() {
@@ -189,41 +207,45 @@ class Gpu {
         return (pal.toInt() shr clr * 2) and 3
     }
 
+//    private fun printVRam() {
+//        repeat(8192) {
+//            Log.i("VRAM DATA $it", "${vram[it].toUByte()}")
+//        }
+//    }
+
     private fun bgScanLine() {
-        // TODO: 7/8/20 scan background image
         val mapOffset =//Assumed lineY+scrollY never overflows
             ((lineY + scrollY) / 8u) * 32u + if (readCtrlBits("bgMapSelect")) 0x1C00u else 0x1800u
         var lineOffset = scrollX / 8u
-        val y = ((lineY + scrollY) and 7u).toInt()
+        val y = ((lineY + scrollY) and 7u)
         var x = (scrollX and 7u).toInt()
         var i = 0
         while (i < 160) {
-            var tile: Short = readFromVRam((mapOffset + lineOffset).toUShort()).toShort()
-            if (readCtrlBits("bg+WinTileSelect") and (tile < 128))
-                tile = (tile + 256).toShort()
-            val lowByte = readFromVRam((tile * 16 + y * 2).toUShort())
-            val highByte = readFromVRam((tile * 16 + y * 2 + 1).toUShort())
+            //val address = (mapOffset + lineOffset).toInt()
+            var tile: UShort = vram[(mapOffset + lineOffset).toInt()].toUShort()
+            //Log.i("Tile","$address")
+            if (!readCtrlBits("bg+WinTileSelect") and (tile < 128u))
+                tile = (tile + 256u).toUShort()
+            val lowByte = vram[(tile * 16u + y * 2u).toInt()].toUShort()
+            val highByte = vram[(tile * 16u + y * 2u + 1u).toInt()].toUShort()
             while (x < 8) {
                 bgLine[i] =
                     ((lowByte.toUInt() shr (7 - x) and 1u) + 2u * (highByte.toUInt() shr (7 - x) and 1u)).toByte()
-                painter.color = when (getColorNo(bgPalette, bgLine[i].toInt())) {
-                    1 -> 0x555555
-                    2 -> 0xAAAAAA
-                    3 -> 0xFFFFFF
-                    else -> 0
+                val color = when (getColorNo(bgPalette, bgLine[i].toInt())) {
+                    1 -> 0xAA
+                    2 -> 0x55
+                    3 -> 0
+                    else -> 255
                 }
-                Log.i("GB.gpu", "${bgLine[i]} $i $lineY")
-                //gameCanvas.drawPoint(i.toFloat(), lineY.toFloat(), painter)
-                gameCanvas.drawRGB(255, 255, 255)
+                painter.color = Color.rgb(color, color, color)
+//                if (bgLine[i] > 0)
+//                    Log.i("GB.gpu", "Color($i,$lineY)=${bgLine[i]} ")
+                gameRenderCanvas.drawPoint(i.toFloat(), lineY.toFloat(), painter)
                 x++
                 i++
             }
             x = 0
             lineOffset++
         }
-    }
-
-    fun getScreenBitmap(): Bitmap {
-        return gameScreen
     }
 }
