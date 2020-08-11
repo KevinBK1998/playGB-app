@@ -19,9 +19,9 @@ private val PERMISSIONS_MIC = arrayOf(
     //Manifest.permission.WRITE_EXTERNAL_STORAGE,
     Manifest.permission.RECORD_AUDIO
 )
-private lateinit var binding: FragmentSplashBinding
 
 class SplashFragment : Fragment() {
+    private lateinit var binding: FragmentSplashBinding
     override fun onCreateView(
         inflater: LayoutInflater,
         container: ViewGroup?,

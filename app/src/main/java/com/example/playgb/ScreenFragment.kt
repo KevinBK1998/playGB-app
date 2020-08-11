@@ -2,6 +2,7 @@ package com.example.playgb
 
 import android.graphics.Bitmap
 import android.graphics.Canvas
+import android.graphics.Color
 import android.graphics.Rect
 import android.media.*
 import android.os.Bundle
@@ -10,7 +11,6 @@ import android.util.Log
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
-import androidx.core.content.res.ResourcesCompat
 import androidx.databinding.DataBindingUtil
 import androidx.fragment.app.Fragment
 import com.example.playgb.databinding.FragmentScreenBinding
@@ -20,53 +20,40 @@ private const val SCALE_FACTOR = 4
 
 @ExperimentalUnsignedTypes
 class ScreenFragment : Fragment() {
-    //Graphics
-    private lateinit var myCanvas: Canvas
-    private lateinit var myBitmap: Bitmap
-    private var gameScreen =
-        Bitmap.createBitmap(SCREEN_WIDTH, SCREEN_HEIGHT, Bitmap.Config.ARGB_8888)
-    private val myTextPaint = TextPaint()
-    private val myRect = Rect()
-    private var blackColour = 0
-    private var whiteColour = 0
-    private var startX = 0
-    private var startY = 0
-
-    //Audio
-    //private val musicLength = 2000000
-    //private var music=ShortArray(100)
-    //private lateinit var audioTrack: AudioTrack
     private lateinit var binding: FragmentScreenBinding
     private lateinit var cpu: Cpu
-    private var gpu = Gpu(gameScreen)
     private var isRecording = false
-    private var started = false
+    private var notStarted = true
+
+    //Graphics
+    private lateinit var gpu: Gpu
+    private lateinit var myCanvas: Canvas
+    private lateinit var myBitmap: Bitmap
+    private val myTextPaint = TextPaint()
+    private val myRect = Rect()
+    private var startX = 0
+    private var startY = 0
+    private val blackCOLOR = Color.rgb(0, 0, 0)
+
+    //Audio
+    private val audioTrack = AudioTrack.Builder()
+        .setAudioAttributes(
+            AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_GAME)
+                .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC).build()
+        )
+        .setAudioFormat(
+            AudioFormat.Builder().setEncoding(AudioFormat.ENCODING_PCM_16BIT).setSampleRate(44100)
+                .setChannelMask(AudioFormat.CHANNEL_OUT_STEREO).build()
+        )
+        .build()
+    private val apu = Apu(audioTrack)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        blackColour = ResourcesCompat.getColor(resources, R.color.colorBlack, null)
-        whiteColour = ResourcesCompat.getColor(resources, R.color.colorWhite, null)
         myTextPaint.apply {
-            color = whiteColour
+            color = Color.rgb(255, 255, 255)
             textSize = 70f
         }
-        val thread = Thread(Runnable { loadRom() })
-        thread.start()
-        thread.join()
-    }
-
-    private fun loadRom() {
-        var inputFile = resources.openRawResource(R.raw.bios)
-        var bis = BufferedInputStream(inputFile)
-        val bios = ByteArray(bis.available())
-        bis.read(bios)
-        bis.close()
-        inputFile = resources.openRawResource(R.raw.tetris)
-        bis = BufferedInputStream(inputFile)
-        val rom = ByteArray(bis.available())
-        bis.read(rom)
-        bis.close()
-        cpu = Cpu(bios, rom, gpu)
     }
 
     override fun onCreateView(
@@ -86,25 +73,24 @@ class ScreenFragment : Fragment() {
         @Suppress("deprecation")
         activity?.window?.decorView?.systemUiVisibility = flags
         binding.screenImage.addOnLayoutChangeListener { view: View, l: Int, t: Int, r: Int, b: Int, _, _, _, _ ->
-            if (!(l == 0 && t == 0 && r == 0 && b == 0)) {
+            if (!(l == 0 && t == 0 && r == 0 && b == 0 && notStarted)) {
+                notStarted = false
                 myBitmap = Bitmap.createBitmap(view.width, view.height, Bitmap.Config.ARGB_8888)
+                binding.screenImage.setImageBitmap(myBitmap)
                 startX = (view.width - SCREEN_WIDTH * SCALE_FACTOR) / 2
                 startY = (view.height - SCREEN_HEIGHT * SCALE_FACTOR) / 2
-                binding.screenImage.setImageBitmap(myBitmap)
                 myCanvas = Canvas(myBitmap)
+                myCanvas.drawColor(blackCOLOR)
                 myRect.set(
                     startX, startY,
                     startX + SCREEN_WIDTH * SCALE_FACTOR,
                     startY + SCREEN_HEIGHT * SCALE_FACTOR
+
                 )
-                myCanvas.drawColor(blackColour)
-                startGame()
+                val thread = Thread(Runnable { loadRom() })
+                thread.start()
             }
         }
-//        binding.screenImage.setOnClickListener {  //binding.screenImage.isClickable = false
-//            startGame(it)
-//        }
-
         binding.startText.setOnClickListener {
             isRecording = true
             val thread = Thread(Runnable { record() })
@@ -118,11 +104,27 @@ class ScreenFragment : Fragment() {
         return binding.root
     }
 
+    private fun loadRom() {
+        gpu = Gpu(myCanvas, myRect, binding.screenImage)
+        var inputFile = resources.openRawResource(R.raw.bios)
+        var bis = BufferedInputStream(inputFile)
+        val bios = ByteArray(bis.available())
+        bis.read(bios)
+        bis.close()
+        inputFile = resources.openRawResource(R.raw.tetris)
+        bis = BufferedInputStream(inputFile)
+        val rom = ByteArray(bis.available())
+        bis.read(rom)
+        bis.close()
+        cpu = Cpu(bios, rom, gpu, apu)
+        audioTrack.play()
+        val thread = Thread(Runnable { runTillCrash() })
+        thread.start()
+    }
+
 //    override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
 //        super.onViewCreated(view, savedInstanceState)
 //        audioTrack.write(music,0,musicLength)
-//        val thread = Thread(Runnable { runBiosCpu() })
-//        thread.start()
 //        audioTrack.play()
 //    }
 
@@ -245,57 +247,17 @@ class ScreenFragment : Fragment() {
 
     }
 
-
-//    private fun runBiosCpu() {
-//        repeat(44000) { cpu.execute() }
-//        binding.screenImage.isClickable = true
-//    }
-
     private fun runTillCrash() {
-        myCanvas.drawColor(blackColour)
-        while (cpu.hasNotCrashed()) {
-            repeat(10000) {
-                cpu.execute()
-            }
-            myCanvas.drawBitmap(gameScreen, null, myRect, null)
-            binding.screenImage.invalidate()
-        }
-        val msg = cpu.execute()
+        while (cpu.hasNotCrashed())
+            cpu.execute()
+        //binding.screenImage.invalidate()
         var log = cpu.log()
-        myTextPaint.textSize = 70f
-        myCanvas.drawText(msg, 100f, 100f, myTextPaint)
         myTextPaint.textSize = 35f
-        myCanvas.drawText(log, 100f, 150f, myTextPaint)
+        myCanvas.drawText(log, 100f, 100f, myTextPaint)
         log = gpu.log()
         myTextPaint.textSize = 50f
-        myCanvas.drawText(log, 100f, 200f, myTextPaint)
+        myCanvas.drawText(log, 100f, 150f, myTextPaint)
         binding.screenImage.invalidate()
     }
-
-    private fun startGame() {
-        if (!started)
-            started = true
-        //var msg = ""
-        //Uncomment For Auto Step
-        val thread = Thread(Runnable { runTillCrash() })
-        thread.start()
-//        repeat(50) {
-//            repeat(456) {
-//                msg=cpu.execute()
-//            }
-//            var log = cpu.log()
-//            myCanvas.drawColor(blackColour)
-//            myTextPaint.textSize = 70f
-//            myCanvas.drawText(msg, 100f, 100f, myTextPaint)
-//            myTextPaint.textSize = 35f
-//            myCanvas.drawText(log, 100f, 150f, myTextPaint)
-//            log = gpu.log()
-//            myTextPaint.textSize = 50f
-//            myCanvas.drawText(log, 100f, 200f, myTextPaint)
-//            myCanvas.drawBitmap(gpu.getScreenBitmap(), null, myRect, null)
-//            view.invalidate()
-//        }
-    }
-
 }
 

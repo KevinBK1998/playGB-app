@@ -3,7 +3,12 @@ package com.example.playgb
 import android.util.Log
 
 @ExperimentalUnsignedTypes
-class Cpu(private val bios: ByteArray, private val rom: ByteArray, private var gpu: Gpu) {
+class Cpu(
+    private val bios: ByteArray,
+    private val rom: ByteArray,
+    private var gpu: Gpu,
+    private var apu: Apu
+) {
     private var pc: UShort = 0u
     private var sp: UShort = 0u
 
@@ -26,12 +31,6 @@ class Cpu(private val bios: ByteArray, private val rom: ByteArray, private var g
     private var m = 0u
     private var no = 0u
     private var time = 0u
-
-    // TODO: 8/8/20 Fix GPU module
-    //private var gpu = Gpu()
-
-    // TODO: 7/8/20 Study APU working and implement it
-    private var apu = Apu()
 
     private fun fetch(): UByte {
         return read8(pc++)
@@ -98,7 +97,8 @@ class Cpu(private val bios: ByteArray, private val rom: ByteArray, private var g
     }
 
     fun log(): String {
-        var log = "PC=0x" + String.format("%02X", (pc.toUInt() shr 8).toByte()) +
+        var log = "OP:0x" + String.format("%02X", read8(pc).toByte()) + "|PC=0x" +
+                String.format("%02X", (pc.toUInt() shr 8).toByte()) +
                 String.format("%02X", pc.toByte()) + "|SP=0x" +
                 String.format("%02X", (sp.toUInt() shr 8).toByte()) +
                 String.format("%02X", sp.toByte()) + "|A=0x" +
@@ -117,211 +117,213 @@ class Cpu(private val bios: ByteArray, private val rom: ByteArray, private var g
         return log
     }
 
-    fun execute(): String {
-        var msg = "Last OP"
+    fun execute() {
         val op = fetch()
-        msg += "|0x" + String.format("%02X", op.toByte())
+        //msg += "|0x" + String.format("%02X", op.toByte())
         no++
         when (op.toInt()) {
             0x04 -> {
                 incB()
-                msg += "|INC B"
+                //msg += "|INC B"
             }
             0x05 -> {
                 decB()
-                msg += "|DEC B"
+                //msg += "|DEC B"
             }
             0x06 -> {
                 loadU8toB()
-                msg += "|LD B,u8"
+                //msg += "|LD B,u8"
             }
             0x0C -> {
                 incC()
-                msg += "|INC C"
+                //msg += "|INC C"
             }
             0x0D -> {
                 decC()
-                msg += "|DEC C"
+                //msg += "|DEC C"
             }
             0x0E -> {
                 loadU8toC()
-                msg += "|LD C,u8"
+                //msg += "|LD C,u8"
             }
             0x11 -> {
                 loadU16toDE()
-                msg += "|LD DE,u16"
+                //msg += "|LD DE,u16"
             }
             0x13 -> {
                 incDE()
-                msg += "|INC DE"
+                //msg += "|INC DE"
             }
             0x15 -> {
                 decD()
-                msg += "|DEC D"
+                //msg += "|DEC D"
             }
             0x17 -> {
                 rotateLeftA()
-                msg += "|RLA"
+                //msg += "|RLA"
             }
             0x18 -> {
                 jumpRel("")
-                msg += "|JR i8"
+                //msg += "|JR i8"
             }
             0x1A -> {
                 loadValueAtDEtoA()
-                msg += "|LD A,[DE]"
+                //msg += "|LD A,[DE]"
             }
             0x1D -> {
                 decE()
-                msg += "|DEC E"
+                //msg += "|DEC E"
             }
             0x1E -> {
                 loadU8toE()
-                msg += "|LD E,u8"
+                //msg += "|LD E,u8"
             }
             0x20 -> {
                 jumpRel("nz")
-                msg += "|JR NZ,i8"
+                //msg += "|JR NZ,i8"
             }
             0x21 -> {
                 loadU16toHL()
-                msg += "|LD HL,u16"
+                //msg += "|LD HL,u16"
             }
             0x22 -> {
                 loadAtHLvalueOfAThenIncHL()
-                msg += "|LDI [HL],A"
+                //msg += "|LDI [HL],A"
             }
             0x23 -> {
                 incHL()
-                msg += "|INC HL"
+                //msg += "|INC HL"
             }
             0x24 -> {
                 incH()
-                msg += "|INC H"
+                //msg += "|INC H"
             }
             0x28 -> {
                 jumpRel("z")
-                msg += "|JR Z,i8"
+                //msg += "|JR Z,i8"
             }
             0x2E -> {
                 loadU8toL()
-                msg += "|LD L,u8"
+                //msg += "|LD L,u8"
             }
             0x31 -> {
                 loadU16toSP()
-                msg += "|LD SP,u16"
+                //msg += "|LD SP,u16"
             }
             0x32 -> {
                 loadAtHLValueOfAThenDecHL()
-                msg += "|LDD [HL],A"
+                //msg += "|LDD [HL],A"
             }
             0x3D -> {
                 decA()
-                msg += "|DEC A"
+                //msg += "|DEC A"
             }
             0x3E -> {
                 loadU8toA()
-                msg += "|LD A,u8"
+                //msg += "|LD A,u8"
             }
             0x4F -> {
                 loadAtoC()
-                msg += "|LD C,A"
+                //msg += "|LD C,A"
             }
             0x57 -> {
                 loadAtoD()
-                msg += "|LD D,A"
+                //msg += "|LD D,A"
             }
             0x67 -> {
                 loadAtoH()
-                msg += "|LD H,A"
+                //msg += "|LD H,A"
             }
             0x77 -> {
                 loadAtoAddressHL()
-                msg += "|LD [HL],A"
+                //msg += "|LD [HL],A"
             }
             0x7B -> {
                 loadEtoA()
-                msg += "|LD A,E"
+                //msg += "|LD A,E"
             }
             0x7C -> {
                 loadHtoA()
-                msg += "|LD A,H"
+                //msg += "|LD A,H"
             }
             0x90 -> {
                 subBFromA()
-                msg += "|SUB A,B"
+                //msg += "|SUB A,B"
             }
             0xAF -> {
                 xorA()
-                msg += "|XOR A"
+                //msg += "|XOR A"
             }
             0xC1 -> {
                 popBC()
-                msg += "|POP BC"
+                //msg += "|POP BC"
             }
             0xC5 -> {
                 pushBC()
-                msg += "|PUSH BC"
+                //msg += "|PUSH BC"
             }
             0xC9 -> {
                 ret()
-                msg += "|RET"
+                //msg += "|RET"
             }
             0xCB -> {
-                msg += "|Prefix CB"
+                //msg += "|Prefix CB"
                 val op2 = fetch()
-                msg += "|0x" + String.format("%02X", op2.toByte())
+                //msg += "|0x" + String.format("%02X", op2.toByte())
                 when (op2.toInt()) {
                     0x11 -> {
                         rotateLeftC()
-                        msg += "|RL C"
+                        //msg += "|RL C"
                     }
                     0x7C -> {
                         bitCheck(h, 7)
-                        msg += "|BIT 7,H"
+                        //msg += "|BIT 7,H"
                     }
                     else -> {
                         pc--
-                        msg += "|Unknown Suffix OP"
+                        Log.i(
+                            "GB.cpu",
+                            "|0x" + String.format("%02X", op.toByte()) + "|Unknown Suffix OP"
+                        )
                         cpuCrash = true
                     }
                 }
             }
             0xCD -> {
                 callU16()
-                msg += "|CALL u16"
+                //msg += "|CALL u16"
             }
             0xE0 -> {
                 loadAtoAddressFFU8()
-                msg += "|LD [FF00+u8],A"
+                //msg += "|LD [FF00+u8],A"
             }
             0xE2 -> {
                 loadAtoAddressFFCc()
-                msg += "|LD [FF00+C],A"
+                //msg += "|LD [FF00+C],A"
             }
             0xEA -> {
                 loadAtU16ValueOfA()
-                msg += "|LD [u16],A"
+                //msg += "|LD [u16],A"
             }
             0xF0 -> {
                 loadValueAtFFU8toA()
-                msg += "|LD A,[FF+u8]"
+                //msg += "|LD A,[FF+u8]"
             }
             0xFE -> {
                 compareU8andA()
-                msg += "|CP A,u8"
+                //msg += "|CP A,u8"
             }
             else -> {
                 pc--
-                msg += "|Unknown OP"
+                Log.i("GB.cpu", "|0x" + String.format("%02X", op.toByte()) + "|Unknown OP")
                 cpuCrash = true
-                return msg
+                return
             }
         }
         val t = 4u * m
         time += t
         gpu.timePassed(t.toInt())
-        return msg
+        apu.timePassed(t.toInt())
     }
 
     private fun subBFromA() {

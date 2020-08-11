@@ -1,14 +1,15 @@
 package com.example.playgb
 
-import android.graphics.Bitmap
-import android.graphics.Canvas
-import android.graphics.Color
-import android.graphics.Paint
+import android.graphics.*
 import android.util.Log
+import android.widget.ImageView
 
 const val SCREEN_WIDTH = 160
 const val SCREEN_HEIGHT = 144
-
+private const val LCD_BACKGROUND_ENABLE = 0
+private const val LCD_BACKGROUND_MAP = 3
+private const val LCD_BACKGROUND_WINDOW_MAP = 4
+private const val LCD_DISPLAY_ENABLE = 7
 /*
 struct GPU
 {
@@ -21,8 +22,14 @@ struct GPU
     //BG palette      0xFF47
 }
 */
+
 @ExperimentalUnsignedTypes
-class Gpu(gameScreenOutput: Bitmap) {
+class Gpu(
+    private var gameCanvas: Canvas,
+    private var drawArea: Rect,
+    private var scrImage: ImageView
+) {
+    // TODO: 9/8/20 Complete GPU module
     private var objPalette: UByte = 0u
     private var objPalette1: UByte = 0u
     private var bgPalette: UByte = 0u
@@ -40,38 +47,24 @@ class Gpu(gameScreenOutput: Bitmap) {
     private var gameRenderScreen =
         Bitmap.createBitmap(SCREEN_WIDTH, SCREEN_HEIGHT, Bitmap.Config.ARGB_8888)
     private var gameRenderCanvas = Canvas(gameRenderScreen)
-    private var gameCanvas = Canvas(gameScreenOutput)
-    private var painter = Paint()
+    private var painter = arrayOf(Paint().apply { color = Color.rgb(0xFF, 0xFF, 0xFF) },
+        Paint().apply { color = Color.rgb(0xAA, 0xAA, 0xAA) },
+        Paint().apply { color = Color.rgb(0x55, 0x55, 0x55) },
+        Paint().apply { color = Color.rgb(0, 0, 0) })
     private var bgLine = ByteArray(160)
+    private var timeToDraw = false
 
-//    private fun readStatusFlags(name: String): Boolean {
-//        // TODO: 7/8/20 Implement to read enable bits
-//        return false
-//    }
+    private fun readRegBit(reg: UByte, bitNo: Int): Boolean {
+        return ((reg.toInt() shr bitNo) and 1) != 0
+    }
 
-    private fun statusMode(): Byte {
+    private fun getStatusMode(): Byte {
         return (status and 3u).toByte()
     }
 
-    private fun readCtrlBits(name: String): Boolean {
-        // TODO: 7/8/20 Implement to read all bits
-        return when (name) {
-            "lcdDisplayEnable" -> (lcdCtrl and 0x80u).toUInt() != 0u
-            "winTileMapSelect" -> (lcdCtrl and 0x40u).toUInt() != 0u
-            "winDisplayEnable" -> (lcdCtrl and 0x20u).toUInt() != 0u
-            "bg+WinTileSelect" -> (lcdCtrl and 0x10u).toUInt() != 0u
-            "bgTileMapSelect" -> (lcdCtrl and 8u).toUInt() != 0u
-            "objSize" -> (lcdCtrl and 4u).toUInt() != 0u
-            "objEnable" -> (lcdCtrl and 2u).toUInt() != 0u
-            "bgEnable" -> (lcdCtrl and 1u).toUInt() != 0u
-            else -> false
-        }
-    }
-
     fun readFromVRam(address: UShort): UByte {
-        val data = vram[(address and 0x1FFFu).toInt()].toUByte()
         //Log.i("GB.mmu", "VRam read $data from $address")
-        return data
+        return vram[(address and 0x1FFFu).toInt()].toUByte()
     }
 
     fun writeToVRam(address: UShort, data: UByte) {
@@ -100,7 +93,7 @@ class Gpu(gameScreenOutput: Bitmap) {
     fun read(address: UShort): UByte {
         //Log.i("GB.mmu", "GPU read $address")
         return when (address.toInt()) {
-            0xFF40 -> lcdCtrl
+            0xFF40 -> lcdCtrl.toUByte()
             0xFF41 -> status
             0xFF42 -> scrollY
             0xFF43 -> scrollX
@@ -131,7 +124,7 @@ class Gpu(gameScreenOutput: Bitmap) {
 
     fun timePassed(time: Int) {
         clock = (clock.toInt() + time).toShort()
-        when (statusMode().toInt()) {
+        when (getStatusMode().toInt()) {
             0 -> {
                 //Log.i("GB.gpu","HBLANK $clock")
                 //HBLANK Mode
@@ -140,7 +133,7 @@ class Gpu(gameScreenOutput: Bitmap) {
                     clock = 0
                     lineY++
                     if (lineY == 144.toUByte()) {
-                        if (!readCtrlBits("lcdDisplayEnable"))
+                        if (!readRegBit(lcdCtrl, LCD_DISPLAY_ENABLE))
                             clearScreen()
                         drawScreen()
                     } else status++
@@ -163,47 +156,48 @@ class Gpu(gameScreenOutput: Bitmap) {
                 if (clock >= 80) {
                     status++
                     clock = 0
+                    if (readRegBit(lcdCtrl, LCD_DISPLAY_ENABLE))
+                        scanLine()
+                    timeToDraw = true
                 }
             }
             3 -> {
                 //Log.i("GB.gpu","VRAM $clock")
                 //VRAM Mode
-                // TODO: 7/8/20 Add dots as per specifications
                 if (clock >= 168) {
                     status = status and 0xFCu
                     clock = 0
-                    if (readCtrlBits("lcdDisplayEnable"))
-                        scanLine()
+                } else if (timeToDraw) {
+                    timeToDraw = false
+                    repeat(160) {
+                        gameRenderCanvas.drawPoint(
+                            it.toFloat(),
+                            lineY.toFloat(),
+                            painter[getPaletteColor(bgPalette, bgLine[it].toInt())]
+                        )
+                    }
                 }
             }
-            else -> Log.w("GB.gpu", "invalid mode:${statusMode()}")
+            else -> Log.w("GB.gpu", "invalid mode:${getStatusMode()}")
         }
     }
 
     private fun drawScreen() {
-//        if(readCtrlBits("lcdDisplayEnable"))
-//        printVRam()
-        gameCanvas.drawBitmap(gameRenderScreen, 0f, 0f, null)
+        gameCanvas.drawBitmap(gameRenderScreen, null, drawArea, null)
+        scrImage.invalidate()
     }
 
     private fun clearScreen() {
-        gameCanvas.drawRGB(0, 0, 0)
+        gameRenderCanvas.drawRGB(0, 0, 0)
     }
 
     private fun scanLine() {
         // TODO: 7/8/20 Complete this function to include interrupts
-        if (readCtrlBits("bgEnable"))
+        if (readRegBit(lcdCtrl, LCD_BACKGROUND_ENABLE))
             bgScanLine()
-        if (readCtrlBits("objEnable"))
-            spriteScanLine()
-
     }
 
-    private fun spriteScanLine() {
-        // TODO: 7/8/20 scan sprites and overwrite if visible
-    }
-
-    private fun getColorNo(pal: UByte, clr: Int): Int {
+    private fun getPaletteColor(pal: UByte, clr: Int): Int {
         return (pal.toInt() shr clr * 2) and 3
     }
 
@@ -215,7 +209,11 @@ class Gpu(gameScreenOutput: Bitmap) {
 
     private fun bgScanLine() {
         val mapOffset =//Assumed lineY+scrollY never overflows
-            ((lineY + scrollY) / 8u) * 32u + if (readCtrlBits("bgMapSelect")) 0x1C00u else 0x1800u
+            ((lineY + scrollY) / 8u) * 32u + if (readRegBit(
+                    lcdCtrl,
+                    LCD_BACKGROUND_MAP
+                )
+            ) 0x1C00u else 0x1800u
         var lineOffset = scrollX / 8u
         val y = ((lineY + scrollY) and 7u)
         var x = (scrollX and 7u).toInt()
@@ -224,23 +222,13 @@ class Gpu(gameScreenOutput: Bitmap) {
             //val address = (mapOffset + lineOffset).toInt()
             var tile: UShort = vram[(mapOffset + lineOffset).toInt()].toUShort()
             //Log.i("Tile","$address")
-            if (!readCtrlBits("bg+WinTileSelect") and (tile < 128u))
+            if (!readRegBit(lcdCtrl, LCD_BACKGROUND_WINDOW_MAP) and (tile < 128u))
                 tile = (tile + 256u).toUShort()
             val lowByte = vram[(tile * 16u + y * 2u).toInt()].toUShort()
             val highByte = vram[(tile * 16u + y * 2u + 1u).toInt()].toUShort()
             while (x < 8) {
                 bgLine[i] =
                     ((lowByte.toUInt() shr (7 - x) and 1u) + 2u * (highByte.toUInt() shr (7 - x) and 1u)).toByte()
-                val color = when (getColorNo(bgPalette, bgLine[i].toInt())) {
-                    1 -> 0xAA
-                    2 -> 0x55
-                    3 -> 0
-                    else -> 255
-                }
-                painter.color = Color.rgb(color, color, color)
-//                if (bgLine[i] > 0)
-//                    Log.i("GB.gpu", "Color($i,$lineY)=${bgLine[i]} ")
-                gameRenderCanvas.drawPoint(i.toFloat(), lineY.toFloat(), painter)
                 x++
                 i++
             }
