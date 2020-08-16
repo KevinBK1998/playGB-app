@@ -4,29 +4,29 @@ import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Rect
-import android.media.*
+import android.media.AudioAttributes
+import android.media.AudioFormat
+import android.media.AudioTrack
 import android.os.Bundle
 import android.text.TextPaint
-import android.util.Log
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
 import androidx.databinding.DataBindingUtil
 import androidx.fragment.app.Fragment
 import com.example.playgb.databinding.FragmentScreenBinding
-import java.io.*
+import java.io.BufferedInputStream
+import java.io.File
 
-private const val SCALE_FACTOR = 4
+private const val SCALE_FACTOR = 6
 
 @ExperimentalUnsignedTypes
 class ScreenFragment : Fragment() {
     private lateinit var binding: FragmentScreenBinding
     private lateinit var cpu: Cpu
-    private var isRecording = false
     private var notStarted = true
 
     //Graphics
-    private lateinit var gpu: Gpu
     private lateinit var myCanvas: Canvas
     private lateinit var myBitmap: Bitmap
     private val myTextPaint = TextPaint()
@@ -34,6 +34,7 @@ class ScreenFragment : Fragment() {
     private var startX = 0
     private var startY = 0
     private val blackCOLOR = Color.rgb(0, 0, 0)
+    private val joyPad = booleanArrayOf(false, false, false, false, false, false, false, false)
 
     //Audio
     private val audioTrack = AudioTrack.Builder()
@@ -46,7 +47,6 @@ class ScreenFragment : Fragment() {
                 .setChannelMask(AudioFormat.CHANNEL_OUT_STEREO).build()
         )
         .build()
-    private val apu = Apu(audioTrack)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -87,46 +87,105 @@ class ScreenFragment : Fragment() {
                     startY + SCREEN_HEIGHT * SCALE_FACTOR
 
                 )
-                val thread = Thread(Runnable { loadRom() })
-                thread.start()
+                val thread = Thread(Runnable { startCpu() })
+                if (isAppRunning)
+                    thread.start()
             }
         }
-        binding.startText.setOnClickListener {
-            isRecording = true
-            val thread = Thread(Runnable { record() })
-            thread.start()
+        /*binding.aText.setOnTouchListener {_,event:MotionEvent->
+            when (event.action) {
+                MotionEvent.ACTION_DOWN -> joyPad[DIRECTION_RIGHT_BUTTON_A + 4] = true
+                MotionEvent.ACTION_UP -> joyPad[DIRECTION_RIGHT_BUTTON_A + 4] = false
+            }
+            return@setOnTouchListener true
         }
-        binding.aText.setOnClickListener { isRecording = false }
-        binding.bText.setOnClickListener {
-            val thread = Thread(Runnable { play() })
-            thread.start()
+        binding.bText.setOnTouchListener {_,event: MotionEvent ->
+            when (event.action) {
+                MotionEvent.ACTION_DOWN -> joyPad[DIRECTION_LEFT_BUTTON_B + 4] = true
+                MotionEvent.ACTION_UP -> joyPad[DIRECTION_LEFT_BUTTON_B + 4] = false
+            }
+            return@setOnTouchListener true
         }
+        binding.selectText.setOnTouchListener {_,event:MotionEvent->
+            when (event.action) {
+                MotionEvent.ACTION_DOWN -> joyPad[DIRECTION_UP_BUTTON_SELECT + 4] = true
+                MotionEvent.ACTION_UP -> joyPad[DIRECTION_UP_BUTTON_SELECT + 4] = false
+            }
+            return@setOnTouchListener true
+        }
+        binding.startText.setOnTouchListener {_,event:MotionEvent->
+            when (event.action) {
+                MotionEvent.ACTION_DOWN -> joyPad[DIRECTION_DOWN_BUTTON_START + 4] = true
+                MotionEvent.ACTION_UP -> joyPad[DIRECTION_DOWN_BUTTON_START + 4] = false
+            }
+            return@setOnTouchListener true
+        }
+        binding.rightText.setOnTouchListener {_,event:MotionEvent->
+            when (event.action) {
+                MotionEvent.ACTION_DOWN -> joyPad[DIRECTION_RIGHT_BUTTON_A ] = true
+                MotionEvent.ACTION_UP -> joyPad[DIRECTION_RIGHT_BUTTON_A ] = false
+            }
+            return@setOnTouchListener true
+        }
+        binding.leftText.setOnTouchListener {_,event: MotionEvent ->
+            when (event.action) {
+                MotionEvent.ACTION_DOWN -> joyPad[DIRECTION_LEFT_BUTTON_B] = true
+                MotionEvent.ACTION_UP -> joyPad[DIRECTION_LEFT_BUTTON_B ] = false
+            }
+            return@setOnTouchListener true
+        }
+        binding.upText.setOnTouchListener {_,event:MotionEvent->
+            when (event.action) {
+                MotionEvent.ACTION_DOWN -> joyPad[DIRECTION_UP_BUTTON_SELECT] = true
+                MotionEvent.ACTION_UP -> joyPad[DIRECTION_UP_BUTTON_SELECT ] = false
+            }
+            return@setOnTouchListener true
+        }
+        binding.downText.setOnTouchListener {_,event:MotionEvent->
+            when (event.action) {
+                MotionEvent.ACTION_DOWN -> joyPad[DIRECTION_DOWN_BUTTON_START] = true
+                MotionEvent.ACTION_UP -> joyPad[DIRECTION_DOWN_BUTTON_START] = false
+            }
+            return@setOnTouchListener true
+        }*/
+        binding.aText.setOnClickListener { joyPad[DIRECTION_RIGHT_BUTTON_A + 4] = true }
+        binding.bText.setOnClickListener { joyPad[DIRECTION_LEFT_BUTTON_B + 4] = true }
+        binding.selectText.setOnClickListener { joyPad[DIRECTION_UP_BUTTON_SELECT + 4] = true }
+        binding.startText.setOnClickListener { joyPad[DIRECTION_DOWN_BUTTON_START + 4] = true }
+        binding.rightText.setOnClickListener { joyPad[DIRECTION_RIGHT_BUTTON_A] = true }
+        binding.leftText.setOnClickListener { joyPad[DIRECTION_LEFT_BUTTON_B] = true }
+        binding.upText.setOnClickListener { joyPad[DIRECTION_UP_BUTTON_SELECT] = true }
+        binding.downText.setOnClickListener { joyPad[DIRECTION_DOWN_BUTTON_START] = true }
         return binding.root
     }
 
-    private fun loadRom() {
-        gpu = Gpu(myCanvas, myRect, binding.screenImage)
+    private fun startCpu() {
+        val gpu = Gpu(myCanvas, myRect, binding.screenImage)
+        val apu = Apu(audioTrack)
         var inputFile = resources.openRawResource(R.raw.bios)
         var bis = BufferedInputStream(inputFile)
         val bios = ByteArray(bis.available())
         bis.read(bios)
         bis.close()
+        val path = context?.getExternalFilesDir(null)
+        val newDumpDirectory = File(path, "dump")
+        if (!newDumpDirectory.exists())
+            newDumpDirectory.mkdirs()
+        val newRomDirectory = File(path, "rom")
+        if (!newRomDirectory.exists())
+            newRomDirectory.mkdirs()
         inputFile = resources.openRawResource(R.raw.tetris)
         bis = BufferedInputStream(inputFile)
         val rom = ByteArray(bis.available())
         bis.read(rom)
         bis.close()
-        cpu = Cpu(bios, rom, gpu, apu)
-        audioTrack.play()
-        val thread = Thread(Runnable { runTillCrash() })
-        thread.start()
+        cpu = Cpu(bios, rom, gpu, apu, joyPad)
+        cpu.runTillCrash()
+        val oam = gpu.dumpOAM()
+        val file = File(newDumpDirectory, "oam.txt")
+        file.writeText(oam)
+        //val contents = file.readText()
     }
-
-//    override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
-//        super.onViewCreated(view, savedInstanceState)
-//        audioTrack.write(music,0,musicLength)
-//        audioTrack.play()
-//    }
 
     override fun onResume() {
         super.onResume()
@@ -135,129 +194,6 @@ class ScreenFragment : Fragment() {
             View.SYSTEM_UI_FLAG_FULLSCREEN or View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY or View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION or View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
         @Suppress("deprecation")
         activity?.window?.decorView?.systemUiVisibility = flags
-    }
-
-    private fun play() {
-        // Get the file we want to playback.
-        val file = File(
-            context?.filesDir?.absolutePath + "/reverseme.pcm"
-        )
-        // Get the length of the audio stored in the file (16 bit so 2 bytes per short)
-        // and create a short array to store the recorded audio.
-        val musicLength = (file.length() / 2).toInt()
-        val music = ShortArray(musicLength)
-
-        try {
-            // Create a DataInputStream to read the audio data back from the saved file.
-            val `is`: InputStream = FileInputStream(file)
-            val bis = BufferedInputStream(`is`)
-            val dis = DataInputStream(bis)
-
-            // Read the file into the music array.
-            var i = 0
-            while (dis.available() > 0) {
-                music[i] = dis.readShort()
-                i++
-            }
-            // Close the input streams.
-            dis.close()
-
-
-            // Create a new AudioTrack object using the same parameters as the AudioRecord
-            // object used to create the file.
-            val audioTrack = AudioTrack.Builder()
-                .setAudioAttributes(
-                    AudioAttributes.Builder()
-                        .setUsage(AudioAttributes.USAGE_GAME)
-                        .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
-                        .build()
-                )
-                .setAudioFormat(
-                    AudioFormat.Builder()
-                        .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
-                        .setSampleRate(44100)
-                        .setChannelMask(AudioFormat.CHANNEL_OUT_STEREO)
-                        .build()
-                )
-                .build()
-            // Start playback
-            audioTrack.play()
-
-            // Write the music buffer to the AudioTrack object
-            audioTrack.write(music, 0, musicLength)
-            audioTrack.stop()
-            audioTrack.release()
-        } catch (t: Throwable) {
-            t.printStackTrace()
-            Log.e("AudioTrack", "Playback Failed")
-        }
-    }
-
-    private fun record() {
-        val frequency = 44100
-        val channelConfiguration = AudioFormat.CHANNEL_OUT_STEREO
-        val audioEncoding = AudioFormat.ENCODING_PCM_16BIT
-
-        val file = File(
-            context?.filesDir?.absolutePath + "/reverseme.pcm"
-        )
-        // Delete any previous recording.
-        if (file.exists())
-            file.delete()
-        // Create the new file.
-        try {
-            file.createNewFile()
-        } catch (e: IOException) {
-            e.printStackTrace()
-            throw IllegalStateException("Failed to create $file")
-        }
-        try {
-            // Create a DataOuputStream to write the audio data into the saved file.
-            val os = FileOutputStream(file)
-            val bos = BufferedOutputStream(os)
-            val dos = DataOutputStream(bos)
-            // Create a new AudioRecord object to record the audio.
-            val bufferSize =
-                AudioRecord.getMinBufferSize(frequency, channelConfiguration, audioEncoding)
-            val audioRecord = AudioRecord(
-                MediaRecorder.AudioSource.MIC,
-                frequency, channelConfiguration,
-                audioEncoding, bufferSize
-            )
-
-            val buffer = ShortArray(bufferSize)
-            Log.i("GB.apu", "Recording Started")
-            audioRecord.startRecording()
-            while (isRecording) {
-                val bufferReadResult = audioRecord.read(buffer, 0, bufferSize)
-                var i = 0
-                repeat(bufferReadResult) {
-                    dos.writeShort(buffer[i].toInt())
-                    i++
-                }
-            }
-            audioRecord.stop()
-            Log.i("GB.apu", "Recording Ended")
-            dos.close()
-
-        } catch (t: Throwable) {
-            t.printStackTrace()
-            Log.e("AudioRecord", "Recording Failed")
-        }
-
-    }
-
-    private fun runTillCrash() {
-        while (cpu.hasNotCrashed())
-            cpu.execute()
-        //binding.screenImage.invalidate()
-        var log = cpu.log()
-        myTextPaint.textSize = 35f
-        myCanvas.drawText(log, 100f, 100f, myTextPaint)
-        log = gpu.log()
-        myTextPaint.textSize = 50f
-        myCanvas.drawText(log, 100f, 150f, myTextPaint)
-        binding.screenImage.invalidate()
     }
 }
 

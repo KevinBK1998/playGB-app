@@ -1,24 +1,14 @@
 package com.example.playgb
 
-import android.Manifest
-import android.content.pm.PackageManager
 import android.os.Bundle
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
 import androidx.appcompat.app.AppCompatActivity
-import androidx.core.content.ContextCompat
 import androidx.databinding.DataBindingUtil
 import androidx.fragment.app.Fragment
 import androidx.navigation.findNavController
 import com.example.playgb.databinding.FragmentSplashBinding
-
-private const val REQUEST_MIC = 1
-private val PERMISSIONS_MIC = arrayOf(
-    //Manifest.permission.READ_EXTERNAL_STORAGE,
-    //Manifest.permission.WRITE_EXTERNAL_STORAGE,
-    Manifest.permission.RECORD_AUDIO
-)
 
 class SplashFragment : Fragment() {
     private lateinit var binding: FragmentSplashBinding
@@ -42,23 +32,6 @@ class SplashFragment : Fragment() {
         binding.splashImage.setOnClickListener {
             it.findNavController().navigate(R.id.action_splashFragment_to_screenFragment)
         }
-        verifyPermissions()
         return binding.root
-    }
-
-    private fun verifyPermissions() {
-        // Check if we have permission
-        val permission = ContextCompat.checkSelfPermission(
-            requireContext(),
-            Manifest.permission.RECORD_AUDIO
-        )
-
-        if (permission != PackageManager.PERMISSION_GRANTED) {
-            // We don't have permission so prompt the user
-            requestPermissions(
-                PERMISSIONS_MIC,
-                REQUEST_MIC
-            )
-        }
     }
 }
