@@ -3,23 +3,22 @@ package com.example.playgb
 import android.os.Bundle
 import androidx.appcompat.app.AppCompatActivity
 
-var isAppRunning = true
+var isAppPaused = false
 
 class MainActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
-        isAppRunning = true
+        isAppPaused = false
     }
 
     override fun onPause() {
         super.onPause()
-        isAppRunning = false
+        isAppPaused = true
     }
 
-    override fun onStop() {
-        super.onStop()
-        isAppRunning = false
-        finish()
+    override fun onResume() {
+        super.onResume()
+        isAppPaused = false
     }
 }

@@ -45,11 +45,13 @@ class Timer {
                 countReg = data
             }
             6 -> {
-                Log.i("TMR", "Modulo write $data")
+                if (data > 0u)
+                    Log.i("TMR", "Modulo write $data")
                 modReg = data
             }
             7 -> {
-                Log.i("TMR", "Control write $data")
+                if (data > 0u)
+                    Log.i("TMR", "Control write $data")
                 ctrlReg = data and 7u
                 clockTrigger = when ((data and 3u).toInt()) {
                     1 -> 16

@@ -1,6 +1,9 @@
 package com.example.playgb
 
 import android.util.Log
+import java.io.BufferedInputStream
+import java.io.File
+import java.io.FileInputStream
 
 private const val NOT_ZERO = 0
 private const val ZERO = 1
@@ -13,12 +16,16 @@ const val DIRECTION_UP_BUTTON_SELECT = 2
 const val DIRECTION_DOWN_BUTTON_START = 3
 
 @ExperimentalUnsignedTypes
+private const val SERIAL_TIMEOUT = 300000000u
+
+@ExperimentalUnsignedTypes
 class Cpu(
     private val bios: ByteArray,
-    private val rom: ByteArray,
+    private val dumpFolder: File,
+    private val romFile: File,
     private var gpu: Gpu,
     private var apu: Apu,
-    val joyPad: BooleanArray
+    private val joyPad: BooleanArray
 ) {
     //System Registers
     private var pc: UShort = 0u
@@ -34,6 +41,9 @@ class Cpu(
     private var f: UByte = 0u
     private var h: UByte = 0u
     private var l: UByte = 0u
+
+    //Rom
+    private val rom = ByteArray(32768)
 
     //Ram
     private var workRam = ByteArray(8192)
@@ -54,6 +64,11 @@ class Cpu(
     private var padDirectionMode = false
     private var m = 0u
     private var time = 0u
+    private var serialByte: UByte = 0u
+    private var serialControl: UByte = 0u
+    private var halted = false
+    private var extraRamEnabled = false
+
     private fun toPadBit(bitNo: Int): Int {
         return (if (joyPad[bitNo + if (padDirectionMode) 0 else 4]) 0 else 1) shl bitNo
     }
@@ -82,13 +97,27 @@ class Cpu(
                 return rom[address.toInt()].toUByte()
             }
             0x1000, 0x2000, 0x3000, 0x4000, 0x5000, 0x6000, 0x7000 -> return rom[address.toInt()].toUByte()
-            0xA000, 0xB000 -> if (cartType > 0) {
-                Log.i(
-                    "External Ram",
-                    "Read ${extraRam[(address.toInt() and 0x1FFF)]} from $address"
-                )
-                return extraRam[(address.toInt() and 0x1FFF)].toUByte()
-            } else Log.w("MBC", "Read $address ignored")
+            0xA000, 0xB000 ->
+                if (extraRamEnabled) {
+                    return if (cartType > 0)
+                        when (cartType) {
+                            3 -> {
+                                Log.i(
+                                    "External Ram",
+                                    "Read ${extraRam[(address.toInt() and 0x1FFF)]} from $address"
+                                )
+                                extraRam[(address.toInt() and 0x1FFF)].toUByte()
+                            }
+                            else -> TODO("Access External Ram")
+                        }
+                    else {
+                        Log.i(
+                            "External Ram",
+                            "Read ${extraRam[(address.toInt() and 0x1FFF)]} from $address"
+                        )
+                        extraRam[(address.toInt() and 0x1FFF)].toUByte()
+                    }
+                }
             0xC000, 0xD000, 0xE000 -> return workRam[(address.toInt() and 0x1FFF)].toUByte()
             0x8000, 0x9000 -> return gpu.readFromVRam(address)
             0xF000 -> {
@@ -100,6 +129,7 @@ class Cpu(
                     0xF00 -> {
                         when {
                             address == 0xFF00.toUShort() -> return getJoyPad()
+                            address == 0xFF01.toUShort() -> return serialByte
                             address in 0xFF04u..0xFF07u -> return tmr.read(address)
                             address == 0xFF0F.toUShort() -> return interruptFlag
                             address == 0xFFFF.toUShort() -> return interruptEnable
@@ -140,16 +170,27 @@ class Cpu(
                     }
                     0xF00 -> {
                         when {
-                            address == 0xFFFF.toUShort() -> {
-                                interruptEnable = data
-                                Log.i(
-                                    "GB.mmu",
-                                    "Wrote " + String.format(
-                                        "%02X",
-                                        data.toByte()
-                                    ) + " to Interrupt Enable"
-                                )
-                            }
+                            address == 0xFFFF.toUShort() ->
+                                if (interruptEnable != data) {
+                                    Log.i(
+                                        "GB.mmu",
+                                        "Write " + String.format(
+                                            "%02X",
+                                            data.toByte()
+                                        ) + " to Interrupt Enable"
+                                    )
+                                    interruptEnable = data
+                                    if (data and 0x10u > 0u)
+                                        TODO("Updating interrupt flags for JoyPad")
+                                    if (data and 1u > 0u)
+                                        Log.w("GB.mmu", "Vblank interrupt enabled")
+                                    if (data and 2u > 0u)
+                                        Log.w("GB.mmu", "LCD Status interrupt enabled")
+                                    if (data and 4u > 0u)
+                                        Log.w("GB.mmu", "Timer interrupt enabled")
+                                    if (data and 8u > 0u)
+                                        Log.w("GB.mmu", "Serial interrupt enabled")
+                                }
                             address < 0xFF80u -> when (address.toInt()) {
                                 0xFF00 -> {
                                     if ((data and 0x30u) == 0x30.toUByte())
@@ -161,29 +202,32 @@ class Cpu(
                                         padDirectionMode = data and 0x10u <= 0u
                                     }
                                 }
-                                0xFF01 -> Log.i(
-                                    "Serial Data",
-                                    "Write $data to FF01 has been ignored"
-                                )
-                                0xFF02 -> Log.i(
-                                    "Serial Data",
-                                    "Write $data to FF02 has been ignored"
-                                )
+                                0xFF01 -> serialByte = data
+                                0xFF02 -> serialControl = data
                                 in 0xFF04..0xFF07 -> tmr.write(address, data)
                                 0xFF0F -> {
-                                    interruptFlag = data
-                                    Log.i(
-                                        "GB.mmu",
-                                        "Wrote " + String.format(
-                                            "%02X",
-                                            data.toByte()
-                                        ) + " to Interrupt Flag"
-                                    )
+                                    if (interruptFlag != data) {
+                                        if (data <= 0u)
+                                            Log.i("GB.mmu", "Clear Interrupt Requests")
+                                        else
+                                            Log.i(
+                                                "GB.mmu",
+                                                "Write " + String.format(
+                                                    "%02X",
+                                                    data.toByte()
+                                                ) + " to Interrupt Flag(" + interruptFlag.toString(2) + ")"
+                                            )
+                                        interruptFlag = data
+                                    }
                                 }
                                 in 0xFF10..0xFF3F -> apu.write(address, data)
                                 0xFF46 -> dmaTransfer(data)
                                 in 0xFF40..0xFF4B -> gpu.write(address, data)
-                                0xFF50 -> readBios = false
+                                0xFF50 -> if (data == 1.toUByte()) readBios = false
+                                else {
+                                    Log.i("ROM", "EOF")
+                                    cpuCrash = true
+                                }
                                 else -> Log.w(
                                     "GB.mmu",
                                     "Ignored write $data to 0x" + address.toString(16)
@@ -196,36 +240,39 @@ class Cpu(
                 }
             }
             // TODO: 12/8/20 Rom or Ram Banking MBC
-            0x0000, 0x1000 -> if (cartType > 0) {
+            0x0000, 0x1000 -> {
                 Log.i("EnableRAM", String.format("%02X", data.toByte()))
-            } else Log.w("MBC", "Write $data ignored")
-            0x2000, 0x3000 -> if (cartType > 0) {
+                extraRamEnabled = data and 0xFu == 0xA.toUByte()
+            }
+            0x2000, 0x3000 -> {
                 romBankNumber =
                     ((romBankNumber.toInt() and 0x60) or (data and 0x1Fu).toInt()).toByte()
-                if (romBankNumber.toUByte() % 32u == 0u) romBankNumber++
-                Log.w(
-                    "GB.mmu",
-                    "lRom Bank = 0x" + String.format(
-                        "%02X",
-                        romBankNumber
-                    ) + " $ramBankMode $data $address"
-                )
-            } else Log.w("MBC", "Write $data ignored")
+                if (romBankNumber.toUByte() % 32u == 0u && cartType < 7) romBankNumber++
+                if (romBankNumber.toInt() == 0 && cartType > 14) romBankNumber++
+                if (!ramBankMode) {
+                    Log.w("GB.mmu", "Switch Rom Bank to 0x" + romBankNumber.toString(16))
+                    val ifs = FileInputStream(romFile)
+                    val bis = BufferedInputStream(ifs)
+                    bis.skip(romBankNumber * 16384L)
+                    bis.read(rom, 16384, 16384)
+                    bis.close()
+                }
+            }
             0x4000, 0x5000 -> if (cartType > 0) {
                 if (ramBankMode) {
                     ramBankNumber = (data and 0x11u).toByte()
                     Log.w("GB.mmu", "Ram Bank = 0x" + String.format("%02X", ramBankNumber))
+                    TODO("Change Ram Bank")
                 } else {
                     romBankNumber = ((romBankNumber.toInt() and 0x1F).toByte())
                     romBankNumber =
                         (romBankNumber.toInt() or ((data and 0x11u).toInt() shl 5)).toByte()
-                    Log.w(
-                        "GB.mmu",
-                        "uRom Bank = 0x" + String.format(
-                            "%02X",
-                            romBankNumber
-                        ) + " $ramBankMode $data $address"
-                    )
+                    Log.w("GB.mmu", "Switch Rom Bank to 0x" + romBankNumber.toString(16))
+                    val ifs = FileInputStream(romFile)
+                    val bis = BufferedInputStream(ifs)
+                    bis.skip(romBankNumber * 16384L)
+                    bis.read(rom, 16384, 16384)
+                    bis.close()
                 }
             } else Log.w("MBC", "Write $data ignored")
             0x6000, 0x7000 -> if (cartType > 0) {
@@ -233,10 +280,22 @@ class Cpu(
                 Log.w("GB.mmu", "Ram Bank Mode = $ramBankMode")
             } else Log.w("MBC", "Write $data ignored")
             0x8000, 0x9000 -> gpu.writeToVRam(address, data)
-            0xA000, 0xB000 -> if (cartType > 0) {
-                Log.i("External Ram", "Write $data to $address")
-                extraRam[(address.toInt() and 0x1FFF)] = data.toByte()
-            } else Log.w("MBC", "Write $data ignored")
+            0xA000, 0xB000 -> if (extraRamEnabled) {
+                if (cartType > 0)
+                    when (cartType) {
+                        3 -> {
+                            Log.i("External Ram", "Write $data to $address")
+                            if (extraRamEnabled)
+                                extraRam[(address.toInt() and 0x1FFF)] = data.toByte()
+                        }
+                        else -> TODO("Access External Ram")
+                    }
+                else {
+                    Log.i("External Ram", "Write $data to $address")
+                    if (extraRamEnabled)
+                        extraRam[(address.toInt() and 0x1FFF)] = data.toByte()
+                }
+            }
             0xC000, 0xD000, 0xE000 -> workRam[(address.toInt() and 0x1FFF)] = data.toByte()
             else -> Log.w(
                 "GB.mmu",
@@ -248,30 +307,38 @@ class Cpu(
     private fun checkInterrupts() {
         val firedBits = interruptEnable and interruptFlag
         if (firedBits != 0.toUByte()) {
-            interruptsMasterEnabled = false
-            //hlt = 0
-            writeU8(--sp, (pc.toUInt() shr 8).toUByte())
-            writeU8(--sp, pc.toUByte())
-            if ((firedBits and 1u) > 0u) {  //Bit 0 is VBLANK
-                //Log.i("GB.cpu", "VBlank Interrupt fired")
-                interruptFlag = interruptFlag and 0xFEu
-                pc = 0x40u
+            halted = false
+            if (interruptsMasterEnabled) {
+                interruptsMasterEnabled = false
+                writeU8(--sp, (pc.toUInt() shr 8).toUByte())
+                writeU8(--sp, pc.toUByte())
+                if ((firedBits and 1u) > 0u) {  //Bit 0 is VBLANK
+                    //Log.i("GB.cpu", "VBlank Interrupt fired")
+                    interruptFlag = interruptFlag and 0xFEu
+                    pc = 0x40u
+                }
+                if ((firedBits and 2u) > 0u) {  //Bit 1 is LCD STATUS
+                    Log.w("Interrupt", "STAT Interrupt fired")
+                    interruptFlag = interruptFlag and 0xFDu
+                    pc = 0x48u
+                }
+                if ((firedBits and 4u) > 0u) {  //Bit 2 is Timer
+                    //Log.w("Interrupt", "Timer Interrupt fired")
+                    interruptFlag = interruptFlag and 0xFBu
+                    pc = 0x50u
+                }
+                if ((firedBits and 8u) > 0u) {  //Bit 3 is Serial so ignore
+                    Log.w("Interrupt", "Serial Interrupt fired")
+                    interruptFlag = interruptFlag and 0xF7u
+                    pc = 0x58u
+                }
+                if ((firedBits and 16u) > 0u) {  //Bit 4 is JoyPad
+                    TODO("JoyPad Interrupt Fired")
+                    /* interruptFlag = interruptFlag and 0xEFu
+                     pc = 0x60u*/
+                }
+                m += 5u
             }
-            if ((firedBits and 2u) > 0u) {  //Bit 1 is LCD STATUS
-                TODO("LCD STAT Interrupt Fired")
-            }
-            if ((firedBits and 4u) > 0u) {  //Bit 2 is Timer
-                TODO("Timer Interrupt Fired")
-            }
-            if ((firedBits and 8u) > 0u) {  //Bit 3 is Serial so ignore
-                Log.w("Interrupt", "Serial somehow fired")
-                interruptFlag = interruptFlag and 0xF7u
-                pc = 0x58u
-            }
-            if ((firedBits and 16u) > 0u) {  //Bit 4 is JoyPad
-                TODO("JoyPad Interrupt Fired")
-            }
-            m = 5u
         }
         val t = 4u * m
         time += t
@@ -316,20 +383,130 @@ class Cpu(
         return log
     }
 
+    private fun dumpROM() {
+        var data = ""
+        repeat(32767) {
+            data += rom[it].toUByte().toString(16) + " "
+            if ((it + 1) % 16 == 0)
+                data += "\n"
+        }
+        val file = File(dumpFolder, "rom.txt")
+        file.writeText(data)
+        //val contents = file.readText()
+    }
+
+    fun runTillCrash() {
+        val ifs = FileInputStream(romFile)
+        val bis = BufferedInputStream(ifs)
+        bis.read(rom)
+        bis.close()
+        var titleSize = 0x144
+        for (ind in 0x134 until 0x144)
+            if (rom[ind].toInt() == 0) {
+                titleSize = ind
+                break
+            }
+        val title = String(rom.copyOfRange(0x134, titleSize))
+        Log.i("Rom Title", title)
+        val romSize = if (rom[0x148] < 9) 32 shl rom[0x148].toInt()
+        else when (rom[0x148].toInt()) {
+            0x54 -> 1536
+            0x53 -> 1229
+            else -> 1127
+        }
+        Log.i("Rom Size", if (romSize > 1000) "${romSize / 1024} MB" else "$romSize KB")
+        cartType = rom[0x147].toInt()
+        Log.i("MBC Type", cartType.toString(16) + "h")
+        //01h  MBC1
+        //03h  MBC1+RAM+BATTERY
+        //13h  MBC3+RAM+BATTERY
+//        dumpROM()
+        while (!cpuCrash) {
+            if (isAppPaused)
+                continue
+            if (halted)
+                m = 1u
+            else
+                execute()
+            updateInterruptFlag()
+            checkInterrupts()
+        }
+        Log.i("CPU Log", log())
+        Log.i("GPU Log", gpu.log())
+    }
+
+    private fun updateInterruptFlag() {
+        // TODO: 14/8/20 Complete this function(serial can be ignored)
+        if (gpu.isVBlank())
+            interruptFlag = interruptFlag or 1u
+        if (gpu.statInterrupted())
+            interruptFlag = interruptFlag or 2u
+        if (tmr.hasOverflowOccurred())
+            interruptFlag = interruptFlag or 4u
+        if (time % SERIAL_TIMEOUT == 0u)
+            if (serialControl and 0x80u > 0u) {
+                serialByte = 0xFFu
+                serialControl = serialControl and 1u
+                interruptFlag = interruptFlag or 8u
+            }
+    }
+
     private fun execute() {
+        //TODO Replace unsigned checks with signed checks
         val op = fetch()
         when (op.toInt()) {
-            0x00 -> m = 1u  //msg+="NOP"
-            0x01 -> loadU16toBC() //msg+="LD BC,u16"
-            0x03 -> incBC()
-            0x04 -> incB()  //msg += "|INC B"
-            0x05 -> decB()  //msg += "|DEC B"
-            0x06 -> {
-                loadToB(fetch())  //msg += "|LD B,u8"
+            0x00 -> m = 1u  //NOP
+            0x01 -> {//LD BC,u16
+                c = fetch()
+                b = fetch()
+                m = 3u
+            }
+            0x02 -> loadToMemory(getCombinedValue(b, c), a)
+            0x03 -> {//INC BC
+                setBC(getCombinedValue(b, c) + 1u)
+                m = 2u
+            }
+            0x04 -> {//INC B
+                f = f and 0x10u
+                if ((b and 0xFu) + 1u > 0xFu)
+                    f = f or 0x20u
+                b++
+                if (b.toInt() == 0)
+                    f = f or 0x80u
+                m = 1u
+            }
+            0x05 -> {   //DEC B
+                val res: UByte = (b - 1u).toUByte()
+                f = f and 0x10u
+                f = f or 0x40u
+                if (res.toInt() == 0)
+                    f = f or 0x80u
+                if ((b and 0xFu).toInt() - 1 < 0)
+                    f = f or 0x20u
+                b = res
+                m = 1u
+            }
+            0x06 -> {//LD B,u8
+                loadToB(fetch())
                 m++
             }
-            0x07 -> rotateLeftAWithoutCarry()
-            0x09 -> addHL(getCombinedValue(b, c))
+            0x07 -> {//RLCA
+                val carry = (a and 0x80u) > 0u
+                f = 0u
+                f = f or ((a and 0x80u).toUInt() shr 3).toUByte()
+                a = (a.toInt() shl 1).toUByte()
+                if (carry)
+                    a++
+                m = 1u
+            }
+
+            0x08 -> {//LD [u16],SP
+                val temp = fetchTwice()
+                loadToMemory(temp, sp.toUByte())
+                loadToMemory((temp + 1u).toUShort(), (sp.toUInt() shr 8).toUByte())
+                m = 5u
+            }
+            0x09 -> addHL(getCombinedValue(b, c))   //ADD HL,SP
             0x0A -> {
                 loadToA(read8(getCombinedValue(b, c)))  //msg += "|LD A,[BC]"
                 m++
@@ -341,37 +518,48 @@ class Cpu(
                 loadToC(fetch()) //msg += "|LD C,u8"
                 m++
             }
+            0x0F -> nonPrefixRotateRightAWithoutCarry()
+            0x10 -> {
+                m = 1u
+                halted = true
+            }
             0x11 -> loadU16toDE()    //msg += "|LD DE,u16"
             0x12 -> loadToMemory(getCombinedValue(d, e), a)
             0x13 -> incDE() //msg += "|INC DE"
+            0x14 -> incD()
             0x15 -> decD()   //msg += "|DEC D"
             0x16 -> {
                 loadToD(fetch()) //msg += "|LD D,u8"
                 m++
             }
-            0x17 -> rotateLeftA()   //msg += "|RLA"
+            0x17 -> nonPrefixRotateLeftA()   //msg += "|RLA"
             0x18 -> jumpRel(-1)  //msg += "|JR i8"
             0x19 -> addHL(getCombinedValue(d, e))
             0x1A -> {
                 loadToA(read8(getCombinedValue(d, e)))  //msg += "|LD A,[DE]"
                 m++
             }
+            0x1B -> decDE()
             0x1C -> incE()
             0x1D -> decE()  //msg += "|DEC E"
             0x1E -> {
                 loadToE(fetch()) //msg += "|LD E,u8"
                 m++
             }
+            0x1F -> nonPrefixRotateRightA()
             0x20 -> jumpRel(NOT_ZERO)   //msg += "|JR NZ,i8"
             0x21 -> loadU16toHL()   //msg += "|LD HL,u16"
             0x22 -> loadAtHLvalueOfAThenIncHL() //msg += "|LDI [HL],A"
             0x23 -> incHL()  //msg += "|INC HL"
             0x24 -> incH() //msg += "|INC H"
+            0x25 -> decH()
             0x26 -> {
                 loadToH(fetch())
                 m++
             }
+            0x27 -> decimalAdjustA()
             0x28 -> jumpRel(ZERO) //msg += "|JR Z,i8"
+            0x29 -> addHL(getCombinedValue(h, l))
             0x2A -> loadValueOfHLtoAThenIncHL()//msg+="LDI A,[HL]"
             0x2B -> decHL()
             0x2C -> incL()
@@ -381,15 +569,26 @@ class Cpu(
                 m++
             }
             0x2F -> compliment()
+            0x30 -> jumpRel(NO_CARRY)
             0x31 -> loadU16toSP()   //msg += "|LD SP,u16"
             0x32 -> loadAtHLValueOfAThenDecHL()//msg += "|LDD [HL],A"
+            0x33 -> {
+                sp++
+                m = 2u
+            }
             0x34 -> incValueAtHL()
             0x35 -> decValueAtHL()
             0x36 -> {
                 loadToMemory(getCombinedValue(h, l), fetch())   //msg+="LD [HL],u8"
                 m++
             }
+            0x37 -> {
+                f = f and 0x80u
+                f = f or 0x10u
+                m = 1u
+            }
             0x38 -> jumpRel(CARRY)
+            0x39 -> addHL(sp)
             0x3A -> loadValueOfHLtoAThenDecHL()
             0x3C -> incA()
             0x3D -> decA()   //msg += "|DEC A"
@@ -397,13 +596,28 @@ class Cpu(
                 loadToA(fetch())  //msg += "|LD A,u8"
                 m++
             }
+            0x3F -> {
+                f = f and 0x80u
+                f = f xor 0x10u
+                m = 1u
+            }
             0x40 -> m = 1u  //LD B,B
+            0x41 -> loadToB(c)
+            0x42 -> loadToB(d)
+            0x43 -> loadToB(e)
+            0x44 -> loadToB(h)
+            0x45 -> loadToB(l)
             0x46 -> {
                 loadToB(read8(getCombinedValue(h, l)))
                 m++
             }
             0x47 -> loadToB(a)
+            0x48 -> loadToC(b)
             0x49 -> m = 1u  //LD C,C
+            0x4A -> loadToC(d)
+            0x4B -> loadToC(e)
+            0x4C -> loadToC(h)
+            0x4D -> loadToC(l)
             0x4E -> {
                 loadToC(read8(getCombinedValue(h, l)))
                 m++
@@ -425,16 +639,30 @@ class Cpu(
             }
             0x5F -> loadToE(a)
             0x60 -> loadToH(b)
+            0x61 -> loadToH(c)
             0x62 -> loadToH(d)
             0x64 -> m = 1u  //LD H,H
+            0x66 -> {
+                loadToH(read8(getCombinedValue(h, l)))
+                m++
+            }
             0x67 -> loadToH(a)   //msg += "|LD H,A"
             0x69 -> loadToL(c)
             0x6B -> loadToL(e)
             0x6D -> m = 1u  //LD L,L
+            0x6E -> {
+                loadToL(read8(getCombinedValue(h, l)))
+                m++
+            }
             0x6F -> loadToL(a)
+            0x70 -> loadToMemory(getCombinedValue(h, l), b)
             0x71 -> loadToMemory(getCombinedValue(h, l), c)
             0x72 -> loadToMemory(getCombinedValue(h, l), d)
             0x73 -> loadToMemory(getCombinedValue(h, l), e)
+            0x76 -> {
+                halted = true
+                m = 1u
+            }
             0x77 -> loadToMemory(getCombinedValue(h, l), a)   //msg += "|LD [HL],A"
             0x78 -> loadToA(b)  //msg += "|LD A,B"
             0x79 -> loadToA(c)
@@ -448,29 +676,68 @@ class Cpu(
             }
             0x7F -> m = 1u  //LD A,A
             0x80 -> addToA(b)
+            0x81 -> addToA(c)
+            0x82 -> addToA(d)
+            0x83 -> addToA(e)
             0x86 -> {
                 addToA(read8(getCombinedValue(h, l)))//msg += "|ADD A,[HL]"
                 m++
             }
             0x85 -> addToA(l)
             0x87 -> addToA(a)
+            0x88 -> addToAWithCarry(b)
             0x89 -> addToAWithCarry(c)
-            0x90 -> subFromA(b)  //msg += "|SUB A,B"
-            0x96 -> {
-                subFromB(read8(getCombinedValue(h, l)))
+            0x8C -> addToAWithCarry(h)
+            0x8E -> {
+                addToAWithCarry(read8(getCombinedValue(h, l)))
                 m++
             }
+            0x90 -> subFromA(b)  //msg += "|SUB A,B"
+            0x91 -> subFromA(c)
+            0x93 -> subFromA(e)
+            0x96 -> {
+                subFromA(read8(getCombinedValue(h, l)))
+                m++
+            }
+            0x97 -> subFromA(a)
+            0xA0 -> andWithA(b)
             0xA1 -> andWithA(c)
-            0xA7 -> andA()
+            0xA6 -> {
+                andWithA(read8(getCombinedValue(h, l)))
+                m++
+            }
+            0xA7 -> andWithA(a)
+            0xA8 -> xorWithA(b)
             0xA9 -> xorWithA(c)
+            0xAE -> {
+                xorWithA(read8(getCombinedValue(h, l)))
+                m++
+            }
             0xAF -> xorA()
             0xB0 -> orWithA(b)
             0xB1 -> orWithA(c) //msg+="OR A,C"
-            0xBE -> compareValueAtHLandA()  //msg += "|CP A,[HL]"
+            0xB2 -> orWithA(d)
+            0xB3 -> orWithA(e)
+            0xB5 -> orWithA(l)
+            0xB6 -> {
+                orWithA(read8(getCombinedValue(h, l)))
+                m++
+            }
+            0xB7 -> orWithA(a)
+            0xB8 -> compareWithA(b)
+            0xB9 -> compareWithA(c)
+            0xBA -> compareWithA(d)
+            0xBB -> compareWithA(e)
+            0xBC -> compareWithA(h)
+            0xBE -> {
+                compareWithA(read8(getCombinedValue(h, l)))
+                m++
+            }
             0xC0 -> returnSelect(NOT_ZERO)
             0xC1 -> popBC() //msg += "|POP BC"
             0xC2 -> jump(NOT_ZERO)
             0xC3 -> jump(-1)   //msg += "|JP u16"
+            0xC4 -> call(NOT_ZERO)
             0xC5 -> pushBC()    //msg += "|PUSH BC"
             0xC6 -> {
                 addToA(fetch())
@@ -482,27 +749,82 @@ class Cpu(
             0xCB -> {   //msg += "|Prefix CB"
                 val op2 = fetch()
                 when (op2.toInt()) {
+                    0x00 -> rotateLeftBWithoutCarry()
+                    0x10 -> rotateLeftB()
                     0x11 -> rotateLeftC()   //msg += "|RL C"
+                    0x19 -> rotateRightC()
+                    0x1A -> rotateRightD()
+                    0x20 -> shiftLeftB()
+                    0x26 -> shiftLeftValueAtHL()
                     0x27 -> shiftLeftA()
+                    0x30 -> swapB()
                     0x33 -> swapE()
                     0x37 -> swapA()
+                    0x38 -> shiftRightB()
                     0x3F -> shiftRightA()
                     0x40 -> bitCheck(b, 0)
+                    0x41 -> bitCheck(c, 0)
+                    0x47 -> bitCheck(a, 0)
                     0x48 -> bitCheck(b, 1)
+                    0x49 -> bitCheck(c, 1)
+                    0x4F -> bitCheck(a, 1)
                     0x50 -> bitCheck(b, 2)
+                    0x57 -> bitCheck(a, 2)
                     0x58 -> bitCheck(b, 3)
+                    0x59 -> bitCheck(c, 3)
                     0x5F -> bitCheck(a, 3)
                     0x60 -> bitCheck(b, 4)
+                    0x61 -> bitCheck(c, 4)
+                    0x67 -> bitCheck(a, 4)
                     0x68 -> bitCheck(b, 5)
+                    0x69 -> bitCheck(c, 5)
+                    0x6E -> {
+                        bitCheck(read8(getCombinedValue(h, l)), 5)
+                        m++
+                    }
                     0x6F -> bitCheck(a, 5)
+                    0x70 -> bitCheck(b, 6)
+                    0x76 -> {
+                        bitCheck(read8(getCombinedValue(h, l)), 6)
+                        m++
+                    }
                     0x77 -> bitCheck(a, 6)
+                    0x78 -> bitCheck(b, 7)
+                    0x79 -> bitCheck(c, 7)
                     0x7C -> bitCheck(h, 7)  //msg += "|BIT 7,H"
-                    0x7E -> bitCheck(read8(getCombinedValue(h, l)), 7)
+                    0x7E -> {
+                        bitCheck(read8(getCombinedValue(h, l)), 7)
+                        m++
+                    }
                     0x7F -> bitCheck(a, 7)
+                    0x80 -> resetB(0)
                     0x86 -> resetValueAtHL(0)
                     0x87 -> resetA(0)
+                    0x8E -> resetValueAtHL(1)
+                    0x90 -> resetB(2)
+                    0x96 -> resetValueAtHL(2)
+                    0x9E -> resetValueAtHL(3)
+                    0xA0 -> resetB(4)
+                    0xAE -> resetValueAtHL(5)
+                    0xB0 -> resetB(6)
                     0xBE -> resetValueAtHL(7)
+                    0xC0 -> setB(0)
+                    0xC6 -> setValueAtHL(0)
+                    0xC7 -> setA(0)
+                    0xCE -> setValueAtHL(1)
+                    0xCF -> setA(1)
+                    0xD0 -> setB(2)
+                    0xD6 -> setValueAtHL(2)
+                    0xD7 -> setA(2)
+                    0xD8 -> setB(3)
+                    0xDE -> setValueAtHL(3)
+                    0xE0 -> setB(4)
+                    0xEE -> setValueAtHL(5)
+                    0xEF -> setA(5)
+                    0xF0 -> setB(6)
+                    0xF8 -> setB(7)
                     0xFE -> setValueAtHL(7)
+                    0xFF -> setA(7)
                     else -> {
                         pc--
                         m = 1u
@@ -514,14 +836,26 @@ class Cpu(
                     }
                 }
             }
-            0xCD -> callU16()   //msg += "|CALL u16"
+            0xCC -> call(ZERO)
+            0xCD -> call(-1)   //msg += "|CALL u16"
+            0xCE -> {
+                addToAWithCarry(fetch())
+                m++
+            }
+            0xCF -> restart(8u)
+            0xD0 -> returnSelect(NO_CARRY)
             0xD1 -> popDE()
+            0xD2 -> jump(NO_CARRY)
             0xD5 -> pushDE()  //msg="PUSH DE"
             0xD6 -> {
                 subFromA(fetch())
                 m++
             }
+            0xD7 -> restart(10u)
+            0xD8 -> returnSelect(CARRY)
             0xD9 -> returnSelect(ENABLE_INTERRUPTS)
+            0xDA -> jump(CARRY)
+            0xDF -> restart(0x18u)
             0xE0 -> {
                 loadToMemory((0xFF00u + fetch()).toUShort(), a)  //msg += "|LD [FF00+u8],A"
                 m++
@@ -533,6 +867,7 @@ class Cpu(
                 andWithA(fetch())
                 m++
             }
+            0xE8 -> addSignedToSP()
             0xE9 -> {
                 pc = (l.toInt() or (h.toInt() shl 8)).toUShort()
                 m = 1u
@@ -556,13 +891,18 @@ class Cpu(
             0xF1 -> popAF()
             0xF3 -> {
                 interruptsMasterEnabled = false  //msg+="DI"
-                Log.i("GB.cpu", "Interrupts Disabled")
+                //Log.i("GB.cpu", "Interrupts Disabled")
                 m = 1u
             }
             0xF5 -> pushAF()//msg+="PUSH AF"
             0xF6 -> {
                 orWithA(fetch())
                 m++
+            }
+            0xF8 -> loadToHLsumOfSPAndI8()
+            0xF9 -> {
+                sp = getCombinedValue(h, l)
+                m = 2u
             }
             0xFA -> {
                 loadToA(read8(fetchTwice()))
@@ -571,10 +911,14 @@ class Cpu(
             0xFB -> {
                 if (read8(pc) != 0xF3.toUByte())
                     interruptsMasterEnabled = true  //msg+="EI"
-                Log.i("GB.cpu", "Interrupts Enabled")
+                //Log.i("GB.cpu", "Interrupts Enabled")
                 m = 1u
             }
-            0xFE -> compareU8andA() //msg += "|CP A,u8"
+            0xFE -> {
+                compareWithA(fetch())
+                m++
+            }
+            0xFF -> restart(38u)
             else -> {
                 pc--
                 m = 0u
@@ -590,11 +934,63 @@ class Cpu(
         tmr.timePassed(t.toInt())
     }
 
+    private fun loadToHLsumOfSPAndI8() {
+        val lit = fetch().toByte()
+        val res = sp.toInt() + lit
+        f = 0u
+        if (lit >= 0) {
+            if (((sp.toInt() and 0xFF) + lit) > 0xFF)
+                f = f or 0x10u
+            if ((sp.toInt() and 0xF) + (lit.toInt() and 0xF) > 0xF)
+                f = f or 0x20u
+        } else {
+            if ((res and 0xFF) <= (sp.toInt() and 0xFF))
+                f = f or 0x10u
+            if (res and 0xF <= sp.toInt() and 0xF)
+                f = f or 0x20u
+        }
+        setHL(res.toUInt())
+    }
+
+    private fun decimalAdjustA() {
+        val sub = f and 0x40u > 0u
+        val half = f and 0x20u > 0u
+        val carry = f and 0x10u > 0u
+        f = f and 0x40u
+        if (sub) {
+            if (half)
+                a = (a - 6u).toUByte()
+            if (carry) {
+                a = (a - 0x60u).toUByte()
+                f = f or 0x10u
+            }
+        } else {
+            if (half || a and 0xFu > 9u)
+                a = (a + 6u).toUByte()
+            if (carry || a and 0xF0u > 0x99u) {
+                a = (a + 0x60u).toUByte()
+                f = f or 0x10u
+            }
+        }
+        if (a <= 0u)
+            f = f or 0x80u
+        m = 1u
+    }
+
     private fun shiftRightA() {
         f = 0u
         f = f or ((a and 1u).toUInt() shl 4).toUByte()
         a = (a.toInt() shr 1).toUByte()
         if (a <= 0u)
+            f = f or 0x80u
+        m = 2u
+    }
+
+    private fun shiftRightB() {
+        f = 0u
+        f = f or ((b and 1u).toUInt() shl 4).toUByte()
+        b = (b.toInt() shr 1).toUByte()
+        if (b <= 0u)
             f = f or 0x80u
         m = 2u
     }
@@ -608,8 +1004,42 @@ class Cpu(
         m = 2u
     }
 
+    private fun shiftLeftB() {
+        f = 0u
+        f = f or ((b and 0x80u).toUInt() shr 3).toUByte()
+        b = (b.toInt() shl 1).toUByte()
+        if (b <= 0u)
+            f = f or 0x80u
+        m = 2u
+    }
+
+    private fun shiftLeftValueAtHL() {
+        f = 0u
+        var lit = read8(getCombinedValue(h, l))
+        f = f or ((lit and 0x80u).toUInt() shr 3).toUByte()
+        lit = (lit.toInt() shl 1).toUByte()
+        if (lit <= 0u)
+            f = f or 0x80u
+        writeU8(getCombinedValue(h, l), lit)
+        m = 4u
+    }
+
+    private fun shiftRightArithmeticB() {
+        f = 0u
+        f = f or ((b and 0x80u).toUInt() shr 3).toUByte()
+        b = (b.toInt() shr 1 + 0x80).toUByte()
+        if (b <= 0u)
+            f = f or 0x80u
+        m = 2u
+    }
+
     private fun resetA(bitNo: Int) {
         a = a and (1 shl bitNo).inv().toUByte()
+        m = 2u
+    }
+
+    private fun resetB(bitNo: Int) {
+        b = b and (1 shl bitNo).inv().toUByte()
         m = 2u
     }
 
@@ -618,6 +1048,16 @@ class Cpu(
             getCombinedValue(h, l),
             read8(getCombinedValue(h, l)) and (1 shl bitNo).inv().toUByte()
         )
+        m = 4u
+    }
+
+    private fun setA(bitNo: Int) {
+        a = a or (1 shl bitNo).toUByte()
+        m = 2u
+    }
+
+    private fun setB(bitNo: Int) {
+        b = b or (1 shl bitNo).toUByte()
         m = 2u
     }
 
@@ -626,7 +1066,7 @@ class Cpu(
             getCombinedValue(h, l),
             read8(getCombinedValue(h, l)) or (1 shl bitNo).toUByte()
         )
-        m = 2u
+        m = 4u
     }
 
     private fun xorWithA(lit: UByte) {
@@ -638,6 +1078,11 @@ class Cpu(
 
     private fun swapA() {
         a = (((a and 0xFu).toInt() shl 4) or ((a and 0xF0u).toInt() shr 4)).toUByte()
+        m = 2u
+    }
+
+    private fun swapB() {
+        b = (((b and 0xFu).toInt() shl 4) or ((b and 0xF0u).toInt() shr 4)).toUByte()
         m = 2u
     }
 
@@ -678,9 +1123,9 @@ class Cpu(
         val res = (a - lit).toInt()
         f = 0u
         f = f or 0x40u
-        if (res.toUByte() == 0.toUByte())
+        if (res == 0)
             f = f or 0x80u
-        if ((a and 0xFu) - (lit and 0xFu) < 0u)
+        if ((a and 0xFu).toInt() - (lit and 0xFu).toInt() < 0)
             f = f or 0x20u
         if (res < 0)
             f = f or 0x10u
@@ -688,66 +1133,16 @@ class Cpu(
         m = 1u
     }
 
-    private fun subFromB(lit: UByte) {
-        val res = (b - lit).toInt()
-        f = 0u
-        f = f or 0x40u
-        if (res.toUByte() == 0.toUByte())
+    private fun compareWithA(lit: UByte) {
+        f = 0x40u
+        val res = (a - lit).toInt()
+        if ((res and 0xFF) == 0)
             f = f or 0x80u
-        if ((b and 0xFu) - (lit and 0xFu) < 0u)
-            f = f or 0x20u
         if (res < 0)
             f = f or 0x10u
-        b = res.toUByte()
+        if ((a and 0xFu).toInt() - (lit and 0xFu).toInt() < 0)
+            f = f or 0x20u
         m = 1u
-    }
-
-    fun runTillCrash() {
-        cartType = rom[0x147].toInt()
-        Log.i("MBC Type", String.format("%02X", cartType.toByte()))
-        while (!cpuCrash) {
-            execute()
-            m = 0u
-            updateInterruptFlag()
-            if (interruptsMasterEnabled)
-                checkInterrupts()
-        }
-        Log.i("CPU Log", log())
-        Log.i("GPU Log", gpu.log())
-    }
-
-    private fun updateInterruptFlag() {
-        // TODO: 14/8/20 Complete this function(serial can be ignored)
-        if (gpu.isVBlank())
-            interruptFlag = interruptFlag or 1u
-        if (tmr.hasOverflowOccurred())
-            interruptFlag = interruptFlag or 4u
-    }
-
-    private fun compareU8andA() {
-        f = 0x40u
-        val lit = fetch()
-        val res = (a - lit).toInt()
-        if ((res and 0xFF) == 0)
-            f = f or 0x80u
-        if (res < 0)
-            f = f or 0x10u
-        if ((a and 0xFu) - (lit and 0xFu) < 0u)
-            f = f or 0x20u
-        m = 2u
-    }
-
-    private fun compareValueAtHLandA() {
-        f = 0x40u
-        val lit = read8(getCombinedValue(h, l))
-        val res = (a - lit).toInt()
-        if ((res and 0xFF) == 0)
-            f = f or 0x80u
-        if (res < 0)
-            f = f or 0x10u
-        if ((a and 0xFu) - (lit and 0xFu) < 0u)
-            f = f or 0x20u
-        m = 2u
     }
 
     private fun returnSelect(condition: Int) {
@@ -771,15 +1166,26 @@ class Cpu(
                 //Log.i("GB.cpu", "Returned and Interrupts Enabled")
                 m += 2u
             }
-            -1 -> {
+            NO_CARRY -> {
+                if ((f and 0x10u).toUInt() == 0u) {
+                    pc = (read8(sp++).toInt() or (read8(sp++).toInt() shl 8)).toUShort()
+                    m += 3u
+                }
+            }
+            CARRY -> {
+                if ((f and 0x10u).toUInt() != 0u) {
+                    pc = (read8(sp++).toInt() or (read8(sp++).toInt() shl 8)).toUShort()
+                    m += 3u
+                }
+            }
+            else -> {
                 pc = (read8(sp++).toInt() or (read8(sp++).toInt() shl 8)).toUShort()
                 m += 2u
             }
-            else -> TODO("RET $condition")
         }
     }
 
-    private fun rotateLeftA() {
+    private fun nonPrefixRotateLeftA() {
         val carry = (f and 0x10u) > 0u
         f = 0u
         f = f or ((a and 0x80u).toUInt() shr 3).toUByte()
@@ -789,24 +1195,83 @@ class Cpu(
         m = 1u
     }
 
-    private fun rotateLeftAWithoutCarry() {
-        val carry = (a and 0x80u) > 0u
+    private fun nonPrefixRotateRightA() {
+        val carry = (f and 0x10u) > 0u
         f = 0u
-        f = f or ((a and 0x80u).toUInt() shr 3).toUByte()
-        a = (a.toInt() shl 1).toUByte()
+        f = f or ((a and 1u).toUInt() shl 4).toUByte()
+        a = (a.toInt() shr 1).toUByte()
         if (carry)
-            a++
+            a = a or 0x80u
         m = 1u
+    }
+
+    private fun nonPrefixRotateRightAWithoutCarry() {
+        val carry = (a and 1u) > 0u
+        f = 0u
+        f = f or ((a and 1u).toUInt() shl 4).toUByte()
+        a = (a.toInt() shr 1).toUByte()
+        if (carry)
+            a = a or 0x80u
+        m = 1u
+    }
+
+    private fun rotateLeftB() {
+        val carry = (f and 0x10u) > 0u
+        f = 0u
+        f = f or ((b and 0x80u).toUInt() shr 3).toUByte()
+        b = (b.toInt() shl 1).toUByte()
+        if (carry)
+            b++
+        if (b == 0.toUByte())
+            f = f or 0x80u
+        m = 2u
     }
 
     private fun rotateLeftC() {
         val carry = (f and 0x10u) > 0u
         f = 0u
+        m = 1u
         f = f or ((c and 0x80u).toUInt() shr 3).toUByte()
         c = (c.toInt() shl 1).toUByte()
         if (carry)
             c++
         if (c == 0.toUByte())
+            f = f or 0x80u
+        m = 2u
+    }
+
+    private fun rotateLeftBWithoutCarry() {
+        val carry = (b and 0x80u) > 0u
+        f = 0u
+        f = f or ((b and 0x80u).toUInt() shr 3).toUByte()
+        b = (b.toInt() shl 1).toUByte()
+        if (carry)
+            b++
+        if (b == 0.toUByte())
+            f = f or 0x80u
+        m = 2u
+    }
+
+    private fun rotateRightC() {
+        val carry = (f and 0x10u) > 0u
+        f = 0u
+        f = f or ((c and 1u).toUInt() shl 4).toUByte()
+        c = (c.toInt() shr 1).toUByte()
+        if (carry)
+            c = c or 0x80u
+        if (c == 0.toUByte())
+            f = f or 0x80u
+        m = 2u
+    }
+
+    private fun rotateRightD() {
+        val carry = (f and 0x10u) > 0u
+        f = 0u
+        f = f or ((d and 1u).toUInt() shl 4).toUByte()
+        d = (d.toInt() shr 1).toUByte()
+        if (carry)
+            d = d or 0x80u
+        if (d == 0.toUByte())
             f = f or 0x80u
         m = 2u
     }
@@ -902,12 +1367,45 @@ class Cpu(
         m = 4u
     }
 
-    private fun callU16() {
-        val newPC = (fetch().toInt() or (fetch().toInt() shl 8)).toUShort()
-        writeU8(--sp, (pc.toUInt() shr 8).toUByte())
-        writeU8(--sp, pc.toUByte())
-        pc = newPC
-        m = 6u
+    private fun call(condition: Int) {
+        val temp = fetchTwice()
+        m = 3u
+        when (condition) {
+            NOT_ZERO ->
+                if ((f and 0x80u).toUInt() == 0u) {
+                    writeU8(--sp, (pc.toUInt() shr 8).toUByte())
+                    writeU8(--sp, pc.toUByte())
+                    pc = temp
+                    m += 3u
+                }
+            ZERO ->
+                if ((f and 0x80u).toUInt() != 0u) {
+                    writeU8(--sp, (pc.toUInt() shr 8).toUByte())
+                    writeU8(--sp, pc.toUByte())
+                    pc = temp
+                    m += 3u
+                }
+            NO_CARRY ->
+                if ((f and 0x10u).toUInt() == 0u) {
+                    writeU8(--sp, (pc.toUInt() shr 8).toUByte())
+                    writeU8(--sp, pc.toUByte())
+                    pc = temp
+                    m += 3u
+                }
+            CARRY ->
+                if ((f and 0x10u).toUInt() != 0u) {
+                    writeU8(--sp, (pc.toUInt() shr 8).toUByte())
+                    writeU8(--sp, pc.toUByte())
+                    pc = temp
+                    m += 3u
+                }
+            else -> {
+                writeU8(--sp, (pc.toUInt() shr 8).toUByte())
+                writeU8(--sp, pc.toUByte())
+                pc = temp
+                m += 3u
+            }
+        }
     }
 
     private fun decA() {
@@ -916,21 +1414,9 @@ class Cpu(
         f = f or 0x40u
         if (res == 0.toUByte())
             f = f or 0x80u
-        if ((a and 0xFu) - 1u < 0u)
+        if ((a and 0xFu).toInt() - 1 < 0)
             f = f or 0x20u
         a = res
-        m = 1u
-    }
-
-    private fun decB() {
-        val res: UByte = (b - 1u).toUByte()
-        f = f and 0x10u
-        f = f or 0x40u
-        if (res == 0.toUByte())
-            f = f or 0x80u
-        if ((b and 0xFu) - 1u < 0u)
-            f = f or 0x20u
-        b = res
         m = 1u
     }
 
@@ -970,6 +1456,18 @@ class Cpu(
         m = 1u
     }
 
+    private fun decH() {
+        val res: UByte = (h - 1u).toUByte()
+        f = f and 0x10u
+        f = f or 0x40u
+        if (res == 0.toUByte())
+            f = f or 0x80u
+        if ((h and 0xFu) - 1u < 0u)
+            f = f or 0x20u
+        h = res
+        m = 1u
+    }
+
     private fun decL() {
         val res: UByte = (l - 1u).toUByte()
         f = f and 0x10u
@@ -987,14 +1485,13 @@ class Cpu(
         m = 2u
     }
 
-    private fun decHL() {
-        setHL(getCombinedValue(h, l) - 1u)
+    private fun decDE() {
+        setHL(getCombinedValue(d, e) - 1u)
         m = 2u
     }
 
-
-    private fun incBC() {
-        setBC(getCombinedValue(b, c) + 1u)
+    private fun decHL() {
+        setHL(getCombinedValue(h, l) - 1u)
         m = 2u
     }
 
@@ -1032,6 +1529,16 @@ class Cpu(
         m = 3u
     }
 
+    private fun addSignedToSP() {
+        f = 0u
+        val lit = fetch().toByte()
+        val res = sp.toInt() + lit
+        if ((sp and 0xFFFu).toInt() + lit > 0xFFF) f = f or 0x20u
+        if (res.toUShort() > 0xFFFFu) f = f or 0x10u
+        sp = res.toUShort()
+        m = 4u
+    }
+
     private fun addHL(lit: UShort) {
         f = f and 0x80u
         val res = getCombinedValue(h, l) + lit
@@ -1047,16 +1554,6 @@ class Cpu(
             f = f or 0x20u
         a++
         if (a == 0.toUByte())
-            f = f or 0x80u
-        m = 1u
-    }
-
-    private fun incB() {
-        f = f and 0x10u
-        if ((b and 0xFu) + 1u > 0xFu)
-            f = f or 0x20u
-        b++
-        if (b == 0.toUByte())
             f = f or 0x80u
         m = 1u
     }
@@ -1127,11 +1624,22 @@ class Cpu(
                     m++
                 }
             }
-            -1 -> {
+            NO_CARRY -> {
+                if ((f and 0x10u).toUInt() <= 0u) {
+                    pc = temp
+                    m++
+                }
+            }
+            CARRY -> {
+                if ((f and 0x10u).toUInt() != 0u) {
+                    pc = temp
+                    m++
+                }
+            }
+            else -> {
                 pc = temp
                 m++
             }
-            else -> TODO("JP $condition")
         }
     }
 
@@ -1203,12 +1711,6 @@ class Cpu(
         m = 1u
     }
 
-    private fun andA() {
-        f = 2u
-        if (a == 0.toUByte()) f = f or 0x80u
-        m = 1u
-    }
-
     private fun andWithA(lit: UByte) {
         f = 2u
         a = a and lit
@@ -1217,7 +1719,7 @@ class Cpu(
     }
 
     private fun orWithA(lit: UByte) {
-        a = ((a or lit).toUByte())
+        a = a or lit
         f = 0u
         if (a == 0.toUByte()) f = f or 0x80u
         m = 1u
@@ -1250,12 +1752,6 @@ class Cpu(
         writeU8(getCombinedValue(h, l), a)
         setHL(getCombinedValue(h, l) - 1u)
         m = 2u
-    }
-
-    private fun loadU16toBC() {
-        c = fetch()
-        b = fetch()
-        m = 3u
     }
 
     private fun loadU16toDE() {
