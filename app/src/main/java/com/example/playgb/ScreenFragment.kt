@@ -20,6 +20,21 @@ import java.io.BufferedInputStream
 import java.io.File
 
 private const val SCALE_FACTOR = 6
+var startStepping = false
+var stepRequested = false
+
+enum class JOYPAD {
+    DIRECTION_RIGHT,
+    DIRECTION_LEFT,
+    DIRECTION_UP,
+    DIRECTION_DOWN,
+    BUTTON_A,
+    BUTTON_B,
+    BUTTON_SELECT,
+    BUTTON_START
+}
+
+var startDump = false
 
 @ExperimentalUnsignedTypes
 class ScreenFragment : Fragment() {
@@ -89,43 +104,86 @@ class ScreenFragment : Fragment() {
                 thread.start()
             }
         }
+        /* binding.screenImage.setOnClickListener {
+             if(!startStepping)
+             startStepping=true
+             else
+             stepRequested=true
+         }*/
         binding.rightText.setOnTouchListener { _, event: MotionEvent ->
             when (event.action) {
-                MotionEvent.ACTION_DOWN -> joyPad[DIRECTION_RIGHT_BUTTON_A] = true
-                MotionEvent.ACTION_MOVE -> joyPad[DIRECTION_RIGHT_BUTTON_A] = true
-                MotionEvent.ACTION_UP -> joyPad[DIRECTION_RIGHT_BUTTON_A] = false
+                MotionEvent.ACTION_DOWN, MotionEvent.ACTION_MOVE ->
+                    updateKey(JOYPAD.DIRECTION_RIGHT.ordinal)
+                MotionEvent.ACTION_UP -> joyPad[JOYPAD.DIRECTION_RIGHT.ordinal] = false
             }
             return@setOnTouchListener true
         }
         binding.leftText.setOnTouchListener { _, event: MotionEvent ->
             when (event.action) {
-                MotionEvent.ACTION_DOWN -> joyPad[DIRECTION_LEFT_BUTTON_B] = true
-                MotionEvent.ACTION_MOVE -> joyPad[DIRECTION_LEFT_BUTTON_B] = true
-                MotionEvent.ACTION_UP -> joyPad[DIRECTION_LEFT_BUTTON_B] = false
+                MotionEvent.ACTION_DOWN, MotionEvent.ACTION_MOVE ->
+                    updateKey(JOYPAD.DIRECTION_LEFT.ordinal)
+                MotionEvent.ACTION_UP -> joyPad[JOYPAD.DIRECTION_LEFT.ordinal] = false
             }
             return@setOnTouchListener true
         }
         binding.upText.setOnTouchListener { _, event: MotionEvent ->
             when (event.action) {
-                MotionEvent.ACTION_DOWN -> joyPad[DIRECTION_UP_BUTTON_SELECT] = true
-                MotionEvent.ACTION_MOVE -> joyPad[DIRECTION_UP_BUTTON_SELECT] = true
-                MotionEvent.ACTION_UP -> joyPad[DIRECTION_UP_BUTTON_SELECT] = false
+                MotionEvent.ACTION_DOWN, MotionEvent.ACTION_MOVE ->
+                    updateKey(JOYPAD.DIRECTION_UP.ordinal)
+                MotionEvent.ACTION_UP -> joyPad[JOYPAD.DIRECTION_UP.ordinal] = false
             }
             return@setOnTouchListener true
         }
         binding.downText.setOnTouchListener { _, event: MotionEvent ->
             when (event.action) {
-                MotionEvent.ACTION_DOWN -> joyPad[DIRECTION_DOWN_BUTTON_START] = true
-                MotionEvent.ACTION_MOVE -> joyPad[DIRECTION_DOWN_BUTTON_START] = true
-                MotionEvent.ACTION_UP -> joyPad[DIRECTION_DOWN_BUTTON_START] = false
+                MotionEvent.ACTION_DOWN, MotionEvent.ACTION_MOVE ->
+                    updateKey(JOYPAD.DIRECTION_DOWN.ordinal)
+                MotionEvent.ACTION_UP -> joyPad[JOYPAD.DIRECTION_DOWN.ordinal] = false
             }
             return@setOnTouchListener true
         }
-        binding.aText.setOnClickListener { joyPad[DIRECTION_RIGHT_BUTTON_A + 4] = true }
-        binding.bText.setOnClickListener { joyPad[DIRECTION_LEFT_BUTTON_B + 4] = true }
-        binding.selectText.setOnClickListener { joyPad[DIRECTION_UP_BUTTON_SELECT + 4] = true }
-        binding.startText.setOnClickListener { joyPad[DIRECTION_DOWN_BUTTON_START + 4] = true }
+        binding.aText.setOnTouchListener { _, event: MotionEvent ->
+            when (event.action) {
+                MotionEvent.ACTION_DOWN, MotionEvent.ACTION_MOVE ->
+                    updateKey(JOYPAD.BUTTON_A.ordinal)
+                MotionEvent.ACTION_UP -> joyPad[JOYPAD.BUTTON_A.ordinal] = false
+            }
+            return@setOnTouchListener true
+        }
+        binding.bText.setOnTouchListener { _, event: MotionEvent ->
+            when (event.action) {
+                MotionEvent.ACTION_DOWN, MotionEvent.ACTION_MOVE ->
+                    updateKey(JOYPAD.BUTTON_B.ordinal)
+                MotionEvent.ACTION_UP -> joyPad[JOYPAD.BUTTON_B.ordinal] = false
+            }
+            return@setOnTouchListener true
+        }
+        binding.selectText.setOnTouchListener { _, event: MotionEvent ->
+            when (event.action) {
+                MotionEvent.ACTION_DOWN, MotionEvent.ACTION_MOVE ->
+                    updateKey(JOYPAD.BUTTON_SELECT.ordinal)
+                MotionEvent.ACTION_UP -> {
+                    startDump = true
+                    joyPad[JOYPAD.BUTTON_SELECT.ordinal] = false
+                }
+            }
+            return@setOnTouchListener true
+        }
+        binding.startText.setOnTouchListener { _, event: MotionEvent ->
+            when (event.action) {
+                MotionEvent.ACTION_DOWN, MotionEvent.ACTION_MOVE ->
+                    updateKey(JOYPAD.BUTTON_START.ordinal)
+                MotionEvent.ACTION_UP -> joyPad[JOYPAD.BUTTON_START.ordinal] = false
+            }
+            return@setOnTouchListener true
+        }
         return binding.root
+    }
+
+    private fun updateKey(pressedButton: Int) {
+        if (!joyPad[pressedButton])
+            int60 = true
+        joyPad[pressedButton] = true
     }
 
     private fun startCpu() {
@@ -144,7 +202,7 @@ class ScreenFragment : Fragment() {
         if (!newRomDirectory.exists())
             newRomDirectory.mkdirs()
         val romFile: File   // = File(newRomDirectory, "rom.gb")
-        val list = newRomDirectory.listFiles()
+        val list = newRomDirectory.listFiles { _, s -> s.endsWith(".gb") }
         if (list!!.isNotEmpty())
             romFile = list.random()
         else {
@@ -152,8 +210,10 @@ class ScreenFragment : Fragment() {
             if (!romFile.exists())
                 romFile.writeBytes(ByteArray(512) { 0xFF.toByte() })
         }
+        val title = romFile.name
+        myCanvas.drawText(title, 100f, 90f, myTextPaint)
         cpu = Cpu(bios, newDumpDirectory, romFile, gpu, apu, joyPad)
-        cpu.runTillCrash()
+        cpu.start()
     }
 
     override fun onResume() {

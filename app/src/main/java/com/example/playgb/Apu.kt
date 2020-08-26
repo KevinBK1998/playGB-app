@@ -4,16 +4,15 @@ import android.media.AudioTrack
 import android.util.Log
 import kotlin.random.Random
 
-// TODO: 17/8/20 Remove audio stuttering ->Fine tune buffer size
-private const val BUFFER_SIZE = 850
-private const val SKIP_FRAMES = 85
+private const val BUFFER_SIZE = 500
+private const val SKIP_FRAMES = 87
 
 @ExperimentalUnsignedTypes
 class Apu(private var audioTrack: AudioTrack) {
     open class SquareWave {
         //Registers
         private var duty = 0
-        private var length = 10
+        private var length = 0
         private var initialVolume = 0
         private var envelopeIncrease = false
         private var numEnvelopeSweep = 0
@@ -24,8 +23,8 @@ class Apu(private var audioTrack: AudioTrack) {
         //Derived values
         private var dutySequence = BooleanArray(8)
         private var sequenceIndex = 0
-        protected var freqTrigger = 0
-        private var lengthTrigger = 0
+        protected var freqTrigger = 8192
+        private var lengthTrigger = 1048576
         private var envelopeTrigger = 0
         protected var timePassed = 0
         private var envEnabled = false
@@ -75,7 +74,7 @@ class Apu(private var audioTrack: AudioTrack) {
         }
 
         fun getEnvelopeReg(): UByte {
-            return ((initialVolume shl 4) + numEnvelopeSweep + 8 * if (envelopeIncrease) 1 else 0).toUByte()
+            return ((initialVolume shl 4) or numEnvelopeSweep or 8 * if (envelopeIncrease) 1 else 0).toUByte()
         }
 
         fun getControlReg(): UByte {
@@ -97,6 +96,8 @@ class Apu(private var audioTrack: AudioTrack) {
                             envEnabled = false
                     }
                 }
+                if (freqTrigger == 0)  //This is required for Links Awakening Menu Screen
+                    freqTrigger = 8192
                 if (timePassed % freqTrigger == 0)
                     sequenceIndex = (sequenceIndex + 1) % 8
                 if (lengthEnabled) {
@@ -131,6 +132,30 @@ class Apu(private var audioTrack: AudioTrack) {
             }
             return 0
         }
+
+        open fun clear() {
+            //Registers
+            duty = 0
+            length = 0
+            initialVolume = 0
+            envelopeIncrease = false
+            numEnvelopeSweep = 0
+            frequencyReg = 0
+            lengthEnabled = false
+            restart = false
+
+            //Derived values
+            sequenceIndex = 0
+            freqTrigger = 8192
+            lengthTrigger = 1048576
+            envelopeTrigger = 0
+            timePassed = 0
+            envEnabled = false
+            outputVolume = 0
+
+            //Channel is playing
+            enabled = false
+        }
     }
 
     class SquareWaveWithSweep : Apu.SquareWave() {
@@ -157,7 +182,7 @@ class Apu(private var audioTrack: AudioTrack) {
         }
 
         fun getSweepReg(): UByte {
-            return (0x80 + (sweepTime shl 4) + numSweepShift + 8 * if (sweepDecrease) 1 else 0).toUByte()
+            return (0x80 or (sweepTime shl 4) + numSweepShift + 8 * if (sweepDecrease) 1 else 0).toUByte()
         }
 
         override fun step() {
@@ -209,6 +234,21 @@ class Apu(private var audioTrack: AudioTrack) {
                 }
             return super.getSquareWave()
         }
+
+        override fun clear() {
+            super.clear()
+            //Registers
+            sweepTime = 0
+            sweepDecrease = false
+            numSweepShift = 0
+
+            //Sweep specific registers
+            swpEnabled = false
+            shadowFrequencyReg = 0
+
+            //Derived value
+            sweepTrigger = 0
+        }
     }
 
     class Wave(private var waveRam: ByteArray) {
@@ -222,9 +262,9 @@ class Apu(private var audioTrack: AudioTrack) {
 
         //Derived values
         private var timePassed = 0
-        private var freqTrigger = 0
+        private var freqTrigger = 4096
         private var positionIndex = 0
-        private var lengthTrigger = 0
+        private var lengthTrigger = 4194304
 
         //Channel is playing
         var enabled = false
@@ -255,10 +295,6 @@ class Apu(private var audioTrack: AudioTrack) {
 
         fun getEnableReg(): UByte {
             return if (soundEnable) 0xFFu else 0x7Fu
-        }
-
-        fun getLengthReg(): UByte {
-            return length.toUByte()
         }
 
         fun getVolumeReg(): UByte {
@@ -310,6 +346,25 @@ class Apu(private var audioTrack: AudioTrack) {
             }
             return 0
         }
+
+        fun clear() {
+            //Registers
+            length = 0
+            volume = 0
+            frequencyReg = 0
+            lengthEnabled = false
+            soundEnable = false
+            restart = false
+
+            //Derived values
+            timePassed = 0
+            freqTrigger = 4096
+            positionIndex = 0
+            lengthTrigger = 4194304
+
+            //Channel is playing
+            enabled = false
+        }
     }
 
     class NoiseWave {
@@ -329,7 +384,7 @@ class Apu(private var audioTrack: AudioTrack) {
         private var envEnabled = false
         private var envelopeTrigger = 0
         private var outputVolume = 0
-        private var lengthTrigger = 0
+        private var lengthTrigger = 1048576
         private var pRBG: Short = 0
         private var freqTrigger = 8
 
@@ -369,11 +424,11 @@ class Apu(private var audioTrack: AudioTrack) {
         }
 
         fun getCounterReg(): UByte {
-            return ((shiftClockFrequency shl 4) + ratioOfFrequency + 8 * if (counterWidthSelect7) 1 else 0).toUByte()
+            return ((shiftClockFrequency shl 4) or ratioOfFrequency or 8 * if (counterWidthSelect7) 1 else 0).toUByte()
         }
 
         fun getEnvelopeReg(): UByte {
-            return ((initialVolume shl 4) + numEnvelopeSweep + 8 * if (envelopeIncrease) 1 else 0).toUByte()
+            return ((initialVolume shl 4) or numEnvelopeSweep or 8 * if (envelopeIncrease) 1 else 0).toUByte()
         }
 
         fun getControlReg(): UByte {
@@ -436,6 +491,31 @@ class Apu(private var audioTrack: AudioTrack) {
             }
             return 0
         }
+
+        fun clear() {
+            //Registers
+            length = 0
+            initialVolume = 0
+            envelopeIncrease = false
+            numEnvelopeSweep = 0
+            shiftClockFrequency = 0
+            counterWidthSelect7 = false
+            ratioOfFrequency = 0
+            lengthEnabled = false
+            restart = false
+
+            //Derived values
+            timePassed = 0
+            envEnabled = false
+            envelopeTrigger = 0
+            outputVolume = 0
+            lengthTrigger = 1048576
+            pRBG = 0
+            freqTrigger = 8
+
+            //Channel is playing
+            enabled = false
+        }
     }
 
     private var square1 = SquareWaveWithSweep()
@@ -464,7 +544,7 @@ class Apu(private var audioTrack: AudioTrack) {
                     if (mixerReg and 0x40u > 0u)
                         amplitude += wave3.getWaveData()
                     if (mixerReg and 0x80u > 0u)
-                        amplitude += noise4.getNoiseData()
+                        amplitude += noise4.getNoiseData() / 2
                     audioBuffer[audioBufferIndex++] = (amplitude * 540).toShort()
                 } else {
                     if (mixerReg and 0x10u > 0u)
@@ -498,40 +578,96 @@ class Apu(private var audioTrack: AudioTrack) {
     }
 
     private fun getPowerStatus(): UByte {
-        return (lengthStatus + if (power) 0x80u else 0u).toUByte()
+        return lengthStatus or if (power) 0xF0u else 0x70u
     }
 
     fun read(address: UShort): UByte {
-        when {
-            power -> return when (val add = (address and 0xFFu).toInt()) {
-                0x10 -> square1.getSweepReg()
-                0x11 -> square1.getPatternReg()
-                0x12 -> square1.getEnvelopeReg()
-                0x14 -> square1.getControlReg()
-                0x16 -> square2.getPatternReg()
-                0x17 -> square2.getEnvelopeReg()
-                0x19 -> square2.getControlReg()
-                0x1A -> wave3.getEnableReg()
-                0x1B -> wave3.getLengthReg()
-                0x1C -> wave3.getVolumeReg()
-                0x1E -> wave3.getControlReg()
-                0x21 -> noise4.getEnvelopeReg()
-                0x22 -> noise4.getCounterReg()
-                0x23 -> noise4.getControlReg()
-                0x24 -> masterVolumeReg
-                0x25 -> mixerReg
-                0x26 -> getPowerStatus() or 0x70u
-                in 0x30..0x3F -> {
-                    Log.i("GB.mmu", "WaveRAM read $address")
-                    waveRam[add and 0xF].toUByte()
-                }
-                else -> 0xFF.toUByte()
+        return when ((address and 0xFFu).toInt()) {
+            in 0x30..0x3F -> {
+                Log.i("GB.mmu", "WaveRAM read $address")
+                waveRam[(address and 0xFu).toInt()].toUByte()
             }
-            address == 0xFF26.toUShort() -> return getPowerStatus() or 0x70u
-            else -> {
-                Log.w("GB.mmu", "$address should not be read while APU is OFF")
-                return 0xFFu
+            0x10 -> {
+                val data = square1.getSweepReg()
+                Log.i("GB.mmu", "APU read " + data.toString(16) + " from " + address.toString(16))
+                data
             }
+            0x11 -> {
+                val data = square1.getPatternReg()
+                Log.i("GB.mmu", "APU read " + data.toString(16) + " from " + address.toString(16))
+                data
+            }
+            0x12 -> {
+                val data = square1.getEnvelopeReg()
+                Log.i("GB.mmu", "APU read " + data.toString(16) + " from " + address.toString(16))
+                data
+            }
+            0x14 -> {
+                val data = square1.getControlReg()
+                Log.i("GB.mmu", "APU read " + data.toString(16) + " from " + address.toString(16))
+                data
+            }
+            0x16 -> {
+                val data = square2.getPatternReg()
+                Log.i("GB.mmu", "APU read " + data.toString(16) + " from " + address.toString(16))
+                data
+            }
+            0x17 -> {
+                val data = square2.getEnvelopeReg()
+                Log.i("GB.mmu", "APU read " + data.toString(16) + " from " + address.toString(16))
+                data
+            }
+            0x19 -> {
+                val data = square2.getControlReg()
+                Log.i("GB.mmu", "APU read " + data.toString(16) + " from " + address.toString(16))
+                data
+            }
+            0x1A -> {
+                val data = wave3.getEnableReg()
+                Log.i("GB.mmu", "APU read " + data.toString(16) + " from " + address.toString(16))
+                data
+            }
+            0x1C -> {
+                val data = wave3.getVolumeReg()
+                Log.i("GB.mmu", "APU read " + data.toString(16) + " from " + address.toString(16))
+                data
+            }
+            0x1E -> {
+                val data = wave3.getControlReg()
+                Log.i("GB.mmu", "APU read " + data.toString(16) + " from " + address.toString(16))
+                data
+            }
+            0x21 -> {
+                val data = noise4.getEnvelopeReg()
+                Log.i("GB.mmu", "APU read " + data.toString(16) + " from " + address.toString(16))
+                data
+            }
+            0x22 -> {
+                val data = noise4.getCounterReg()
+                Log.i("GB.mmu", "APU read " + data.toString(16) + " from " + address.toString(16))
+                data
+            }
+            0x23 -> {
+                val data = noise4.getControlReg()
+                Log.i("GB.mmu", "APU read " + data.toString(16) + " from " + address.toString(16))
+                data
+            }
+            0x24 -> {
+                val data = masterVolumeReg
+                Log.i("GB.mmu", "APU read " + data.toString(16) + " from " + address.toString(16))
+                data
+            }
+            0x25 -> {
+                val data = mixerReg
+                Log.i("GB.mmu", "APU read " + data.toString(16) + " from " + address.toString(16))
+                data
+            }
+            0x26 -> {
+                val data = getPowerStatus()
+                Log.i("GB.mmu", "APU read " + data.toString(16) + " from " + address.toString(16))
+                data
+            }
+            else -> 0xFF.toUByte()
         }
     }
 
@@ -637,10 +773,11 @@ class Apu(private var audioTrack: AudioTrack) {
                     power = (data and 0x80u) != 0.toUByte()
                     if (!power) {
                         Log.i("GB.apu", "Power OFF")
+                        clearReg()
                         audioTrack.stop()
                     }
                 }
-                else -> Log.e("GB.mmu", "$address should not be written to")
+                else -> Log.e("GB.mmu", address.toString(16) + " is unavailable")
             }
             address == 0xFF26.toUShort() -> {
                 power = (data and 0x80u) != 0.toUByte()
@@ -649,10 +786,21 @@ class Apu(private var audioTrack: AudioTrack) {
                     audioTrack.play()
                 } else {
                     Log.i("GB.apu", "Power OFF")
+                    clearReg()
                     audioTrack.stop()
                 }
             }
             else -> Log.w("GB.mmu", "$address should not be written to while APU is OFF")
         }
+    }
+
+    private fun clearReg() {
+        square1.clear()
+        square2.clear()
+        wave3.clear()
+        noise4.clear()
+        masterVolumeReg = 0u
+        mixerReg = 0u
+        lengthStatus = 0u
     }
 }

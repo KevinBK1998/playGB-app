@@ -1,6 +1,7 @@
 package com.example.playgb
 
 import android.util.Log
+import java.util.*
 
 private const val TIMER_ENABLE = 0b100
 
@@ -14,6 +15,8 @@ class Timer {
     private var int50 = false
     private var divPrevTime = 1
     private var prevTime = 1
+    private var rtcFlags: UByte = 0u
+    private lateinit var latchedTime: Date
 
     fun timePassed(time: Int) {
         repeat(time) {
@@ -80,5 +83,10 @@ class Timer {
             0xFF06.toUShort() -> modReg
             else -> ctrlReg
         }
+    }
+
+    fun latchClockData() {
+        // TODO: 24/8/20 When Day Counter overflows Carry flag should be set
+        latchedTime = Date()
     }
 }
